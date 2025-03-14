@@ -1,0 +1,8 @@
+DELIMITER $$
+
+CREATE PROCEDURE GetAllUsers()
+BEGIN
+    SELECT * FROM User;
+END $$
+
+DELIMITER ;
