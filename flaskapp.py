@@ -7,6 +7,7 @@ import time
 from threading import Timer
 import mysql.connector
 from mysql.connector import Error
+from authlib.integrations.flask_client import OAuth
 
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_session import Session
@@ -14,6 +15,11 @@ import secrets
 
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+
+import mysql.connector
+from mysql.connector import Error
+from google.cloud.sql.connector import Connector
+import sqlalchemy
 
 app = Flask(__name__)
 CORS(app)
@@ -23,6 +29,16 @@ limiter = Limiter(
     app=app,
     default_limits=["5 per second", "50 per minute"],
 )
+# Explicitly set the path to your service account key
+os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = r'./t4-backend-469434088c8d.json'
+def load_credentials():
+    try:
+        credentials, project = google.auth.default()
+        return credentials
+    except Exception as e:
+        print(f"Error loading credentials: {e}")
+        return None
+    
 
 # Configuration
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", secrets.token_hex(32))
@@ -43,21 +59,36 @@ google = oauth.register(
 )
 
 
+
+# Initialize the Connector object
+connector = Connector()
+# function to return the database connection object
+def getconn():
+    conn = connector.connect(
+        instance_connection_string=os.getenv('INSTANCE_CONNECTION_STRING'),  # e.g. "project:region:instance"
+        driver="pymysql",
+        user=os.getenv('DB_USER'),
+        password=os.getenv('DB_PASS'),
+        db=os.getenv('DB_NAME')
+    )
+    return conn
+
 # Database connection
 def get_db_connection():
     try:
-        connection = mysql.connector.connect(
-            host=os.getenv('DB_HOST'),
-            database=os.getenv('DB_NAME'),
-            user=os.getenv('DB_USER'),
-            password=os.getenv('DB_PASSWORD')
+        # Create SQLAlchemy connection pool
+        pool = sqlalchemy.create_engine(
+            "mysql+pymysql://",
+            creator=getconn,
         )
-        if connection.is_connected():
-            return connection
-    except Error as e:
-        #print(f"Error connecting to MySQL database: {e}")
+        
+        # Get a connection from the pool and return it
+        connection = pool.connect()
+        return connection
+    except Exception as e:
+        print(f"Error connecting to Cloud SQL: {e}")
         return None
-
+    
 """ # Helper function for executing SQL queries
 def execute_query(query, params=()):
     connection = get_db_connection()
@@ -76,7 +107,44 @@ def execute_query(query, params=()):
         if connection.is_connected():
             cursor.close()
             connection.close() """
-            
+@app.route("/test-database", methods=["GET"])
+def test_database_connection():
+    connection = get_db_connection()
+    if connection is None:
+        return jsonify({"message": "Database connection failed"}), 500
+    
+    try:
+        # Use SQLAlchemy's text method to create a SQL statement
+        query = sqlalchemy.text("SELECT * FROM User LIMIT 5")
+        
+        # Execute the query
+        result = connection.execute(query)
+        
+        # Fetch all results
+        results = result.fetchall()
+        
+        # Convert results to a list of dictionaries
+        # Use column names from the result
+        columns = result.keys()
+        user_list = [dict(zip(columns, row)) for row in results]
+        
+        return jsonify({
+            "message": "Database connection successful",
+            "users": user_list,
+            "user_count": len(user_list)
+        }), 200
+    
+    except Exception as e:
+        return jsonify({
+            "message": "Error querying database",
+            "error": str(e)
+        }), 500
+    
+    finally:
+        # Close the connection if it's still open
+        if connection:
+            connection.close()
+                   
 @app.route("/test")
 def test():
     return jsonify({"message":"helllo"})     
