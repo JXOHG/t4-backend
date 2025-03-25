@@ -256,26 +256,6 @@ def registrations(event_id, registration_id = None):
             
         #print(f"deleted user from event {event_id} register id: {registration_id}")
     
-
-@app.route("/login", methods = ["POST"])
-def login():
-    if request.method == "POST":
-        #print("checking if user can log in")
-        return
-
-@app.route("/logout", methods = ["POST"])
-def logout():
-    if request.method == "POST":
-        #print("logging out")
-        return
-    
-@app.route("/register", methods = ["POST"])
-def register():
-    if request.method == "POST":
-        #print("registering")
-        return
-    
-    
 @app.route("/users", defaults={"id": None}, methods= ["GET", "POST"])
 @app.route("/users/<int:id>", methods= ["GET", "PUT", "DELETE"])
 def users(id = None):
