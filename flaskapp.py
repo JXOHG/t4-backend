@@ -12,8 +12,17 @@ from flask_login import LoginManager, UserMixin, login_user, logout_user, login_
 from flask_session import Session
 import secrets
 
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
 app = Flask(__name__)
 CORS(app)
+
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["5 per second", "50 per minute"],
+)
 
 # Configuration
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", secrets.token_hex(32))
@@ -32,6 +41,7 @@ google = oauth.register(
     client_kwargs={'scope': 'openid email profile'},
     redirect_uri='http://localhost:5000/authorize/google'  # Adjust for production
 )
+
 
 # Database connection
 def get_db_connection():
@@ -67,7 +77,9 @@ def execute_query(query, params=()):
             cursor.close()
             connection.close() """
             
-            
+@app.route("/test")
+def test():
+    return jsonify({"message":"helllo"})     
 
 @app.route("/events", defaults={"event_id": None}, methods=["GET", "POST"])
 @app.route("/events/<int:event_id>", methods=["GET", "PUT", "DELETE"])
