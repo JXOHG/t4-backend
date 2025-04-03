@@ -497,7 +497,7 @@ def callback():
 
     print(user_email)
     allowed_domain = "gmail.com"  
-    if not (user_email == "westernsalesclub@gmail.com"): #.endswith(f"@{allowed_domain}"): if we want to allow only specific domain emails
+    if not (user_email == "sales.club@westernusc.ca" or "westernsalesclub@gmail.com"):
         session.pop("user", None)
         return redirect(url_for("failed_login") + "?error=Only users from " + allowed_domain + " are allowed to sign in")
 
