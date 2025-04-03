@@ -7,10 +7,7 @@ import json
 from threading import Timer
 import mysql.connector
 from mysql.connector import Error
-import bcrypt
-import jwt
 import datetime
-import requests
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 
@@ -71,69 +68,7 @@ google = oauth.register(
 )
 
 
-@app.route("/")
-def home():
-    user = session.get("user")
-    print(user)
-    return f"Hello, {user['name']}!" if user else "Hello, Guest! <a href='/login'>Login with Google</a>"
 
-@app.route("/login-failed")
-def failed_login():
-    return f"Login Failed"
-
-@app.route("/login")
-def login():
-    return google.authorize_redirect(url_for("callback", _external=True))
-
-@app.route("/callback")
-def callback():
-    token = google.authorize_access_token()
-    user = google.get("userinfo").json()  
-
-
-    user_email = user.get("email")
-    if not user_email:
-        session.pop("user", None)
-        return redirect(url_for("failed_login") + "?error=Email not provided by Google")
-
-    print(user_email)
-    allowed_domain = "gmail.com"  
-    if not (user_email == "westernsalesclub@gmail.com"): #.endswith(f"@{allowed_domain}"): if we want to allow only specific domain emails
-        session.pop("user", None)
-        return redirect(url_for("failed_login") + "?error=Only users from " + allowed_domain + " are allowed to sign in")
-
-    # if we want to allow people form the DB
-    # connection = get_db_connection()
-    # if connection is None:
-    #     session.pop("user", None)
-    #     return redirect(url_for("home") + "?error=Database connection failed")
-
-    try:
-
-        # query = sqlalchemy.text("SELECT * FROM User WHERE email = :email")
-        # result = connection.execute(query, {"email": user_email})
-        # user_record = result.fetchone()
-
-        # if not user_record:
-        #     session.pop("user", None)
-        #     return redirect(url_for("home") + "?error=User not found in the database")
-
-        session["user"] = user
-        return redirect(url_for("home"))
-
-    except Exception as e:
-        session.pop("user", None)
-        return redirect(url_for("failed_login") + "?error=Error checking user: " + str(e))
-
-    # finally:
-        # if connection:
-        #     connection.close()
-
-# Route: Logout
-@app.route("/logout")
-def logout():
-    session.pop("user", None)
-    return redirect(url_for("home"))
 
 
 # Initialize the Connector object
@@ -533,6 +468,73 @@ def users(id = None):
             connection.close()
             return jsonify({"message": "unable to delete managers"}), 400
     
+
+@app.route("/")
+def home():
+    user = session.get("user")
+    print(user)
+    return f"Hello, {user['name']}!" if user else "Hello, Guest! <a href='/login'>Login with Google</a>"
+
+@app.route("/login")
+def login():
+    return google.authorize_redirect(url_for("callback", _external=True))
+
+@app.route("/login-failed")
+def failed_login():
+    return f"Login Failed"
+
+
+@app.route("/callback")
+def callback():
+    token = google.authorize_access_token()
+    user = google.get("userinfo").json()  
+
+
+    user_email = user.get("email")
+    if not user_email:
+        session.pop("user", None)
+        return redirect(url_for("failed_login") + "?error=Email not provided by Google")
+
+    print(user_email)
+    allowed_domain = "gmail.com"  
+    if not (user_email == "westernsalesclub@gmail.com"): #.endswith(f"@{allowed_domain}"): if we want to allow only specific domain emails
+        session.pop("user", None)
+        return redirect(url_for("failed_login") + "?error=Only users from " + allowed_domain + " are allowed to sign in")
+
+    # if we want to allow people form the DB
+    # connection = get_db_connection()
+    # if connection is None:
+    #     session.pop("user", None)
+    #     return redirect(url_for("home") + "?error=Database connection failed")
+
+    try:
+
+        # query = sqlalchemy.text("SELECT * FROM User WHERE email = :email")
+        # result = connection.execute(query, {"email": user_email})
+        # user_record = result.fetchone()
+
+        # if not user_record:
+        #     session.pop("user", None)
+        #     return redirect(url_for("home") + "?error=User not found in the database")
+
+        session["user"] = user
+        return redirect(url_for("home"))
+
+    except Exception as e:
+        session.pop("user", None)
+        return redirect(url_for("failed_login") + "?error=Error checking user: " + str(e))
+
+    # finally:
+        # if connection:
+        #     connection.close()
+
+# Route: Logout
+@app.route("/logout")
+def logout():
+    session.pop("user", None)
+    return redirect(url_for("home"))
+
+
 if __name__ == '__main__':
     app.run(port=5000, debug=True)
 
