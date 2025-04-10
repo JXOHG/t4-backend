@@ -1,8 +1,8 @@
 DELIMITER $$
 
-CREATE PROCEDURE DeleteUser(IN user_id INT)
+CREATE PROCEDURE DeleteUser(IN input_user_id INT)
 BEGIN
-    DELETE FROM User WHERE user_id = user_id;
+    DELETE FROM User WHERE input_user_id = user_id;
 END $$
 
 DELIMITER ;
