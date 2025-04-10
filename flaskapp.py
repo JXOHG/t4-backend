@@ -23,7 +23,8 @@ from flask_limiter.util import get_remote_address
 import mysql.connector
 from mysql.connector import Error
 from google.cloud.sql.connector import Connector
-import sqlalchemy
+#import sqlalchemy
+import pymysql
 from google.cloud import storage
 import uuid
 from werkzeug.utils import secure_filename
@@ -37,7 +38,10 @@ limiter = Limiter(
     default_limits=["5 per second", "50 per minute"],
 )
 # Explicitly set the path to your service account key
-os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = r'./t4-backend-ce84965061ed.json'
+#os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = r'./t4-backend-ce84965061ed.json'
+
+#kenneth
+#os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = r't4-backend-4e28b71354cb.json'
 def load_credentials():
     try:
         credentials, project = google.auth.default()
@@ -90,15 +94,18 @@ def getconn():
 # Database connection
 def get_db_connection():
     try:
-        # Create SQLAlchemy connection pool
+        """ # Create SQLAlchemy connection pool
         pool = sqlalchemy.create_engine(
             "mysql+pymysql://",
             creator=getconn,
         )
         
         # Get a connection from the pool and return it
-        connection = pool.connect()
-        return connection
+        connection = pool.connect()  """
+        
+        
+        return getconn()
+        #return connection
     except Exception as e:
         print(f"Error connecting to Cloud SQL: {e}")
         return None
@@ -110,7 +117,7 @@ def execute_query(query, params=()):
         return []
     
     try:
-        cursor = connection.cursor(dictionary=True)
+        cursor = connection.cursor(pymysql.cursors.DictCursor)
         cursor.execute(query, params)
         results = cursor.fetchall()
         return results
@@ -121,7 +128,7 @@ def execute_query(query, params=()):
         if connection.is_connected():
             cursor.close()
             connection.close() """
-@app.route("/test-database", methods=["GET"])
+""" @app.route("/test-database", methods=["GET"])
 def test_database_connection():
     connection = get_db_connection()
     if connection is None:
@@ -129,8 +136,11 @@ def test_database_connection():
     
     try:
         # Use SQLAlchemy's text method to create a SQL statement
-        query = sqlalchemy.text("SELECT * FROM User LIMIT 5")
-        
+        #query = sqlalchemy.text("SELECT * FROM User LIMIT 5")
+        #query = sqlalchemy.text("SELECT * FROM Event")
+        #query = sqlalchemy.text("CALL createEvent('test', 'test event', '2025-07-15 00:00:00', 'test location')")
+        query = sqlalchemy.text("SHOW CREATE PROCEDURE UpdateUser")
+
         # Execute the query
         result = connection.execute(query)
         
@@ -158,6 +168,7 @@ def test_database_connection():
         # Close the connection if it's still open
         if connection:
             connection.close()
+            """
 
 def call_procedure(procedure_name, params=()):
     connection = get_db_connection()
@@ -192,33 +203,35 @@ def events(event_id = None):
     connection = get_db_connection()  # Establish a database connection
     if connection is None:
         return jsonify({"message": "Database connection failed"}), 500
-    cursor = connection.cursor(dictionary=True)
+    cursor = connection.cursor(pymysql.cursors.DictCursor)
         
     if request.method == 'GET':
         if event_id is None:
             #print("return full db")
             
             try:
-                rows = cursor.callproc("getAllUpcommingEvents")
+                cursor.callproc("GetUpcomingEvents")
+                rows = cursor.fetchall()
                 cursor.close()
                 connection.close()
                 return jsonify({"message": rows}), 200
-            except:
+            except Exception as e:
                 cursor.close()
                 connection.close()
-                return jsonify({"message": "error calling all events"}), 401
+                return jsonify({"message": f"error calling all events: {str(e)}"}), 401
                 
         
         #print(f"Fetching event with id: {event_id}")
         try:
-            row = cursor.callproc("eventDetailByID")
+            cursor.callproc("GetEventDetails", (event_id,) )
+            row = cursor.fetchall()
             cursor.close()
             connection.close()
             return jsonify({"message": row}), 200
-        except:
+        except Exception as e:
             cursor.close()
             connection.close()
-            return jsonify({"message": "error fetching event"}), 401 
+            return jsonify({"message": f"error fetching event: {str(e)}"}), 401 
 
     elif request.method == 'POST':
         #print("create event")
@@ -227,7 +240,6 @@ def events(event_id = None):
             cursor.close()
             connection.close()
             return jsonify({"message": "Invalid JSON or missing Content-Type"}), 400
-        
         try: 
             title = data["title"]
             description = data["description"]
@@ -238,7 +250,17 @@ def events(event_id = None):
             connection.close()
             return jsonify({"message": "Missing data"}), 400
         
-        cursor.callproc("createEvent",(title, description, eventDate, location,))
+        try:
+            # Example input: 'Mon, 15 Jul 2025 00:00:00 GMT'
+            parsed_event_date = datetime.strptime(eventDate, "%a, %d %b %Y %H:%M:%S GMT")
+            formatted_event_date = parsed_event_date.strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            cursor.close()
+            connection.close()
+            return jsonify({"message": "Invalid date format"}), 400
+        
+        cursor.callproc("createEvent",(title, description, formatted_event_date, location,))
+        connection.commit()
 
         cursor.close()
         connection.close()
@@ -264,28 +286,39 @@ def events(event_id = None):
             return jsonify({"message": "Missing data"}), 400
         
         try:
-            cursor.callproc("updateEvent",(event_id, title, description, eventDate, location,))
+            # Example input: 'Mon, 15 Jul 2025 00:00:00 GMT'
+            parsed_event_date = datetime.strptime(eventDate, "%a, %d %b %Y %H:%M:%S GMT")
+            formatted_event_date = parsed_event_date.strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            cursor.close()
+            connection.close()
+            return jsonify({"message": "Invalid date format"}), 400
+        
+        try:
+            cursor.callproc("UpdateEvent",(event_id, title, description, formatted_event_date, location,))
+            connection.commit()
             cursor.close()
             connection.close()
             return jsonify({"message": "Updated event"}), 200
-        except:
+        except Exception as e:
             cursor.close()
             connection.close()
-            return jsonify({"message": "error updating event"}), 401
+            return jsonify({"message": f"error updating event: {str(e)}"}), 401 
         
     elif request.method == 'DELETE':
         #print(f"deleting event with id: {event_id}")
         try:
-            cursor.callproc("deleteEvent",(event_id,))
+            cursor.callproc("DeleteEvent",(event_id,))
+            connection.commit()
             cursor.close()
             connection.close()
-            return jsonify({"message": "deleted event"}), 200
+            return jsonify({"message": f"deleted event {event_id}"}), 200
         except:
             cursor.close()
             connection.close()
             return jsonify({"message": "event cannot be deleted"}), 401
     
-
+""" 
 @app.route("/events/<int:event_id>/register", methods=["POST"])
 def register_user(event_id):
     #print(f"user is being added to event with ID: {event_id}")
@@ -296,18 +329,18 @@ def register_user(event_id):
     connection = get_db_connection()  # Establish a database connection
     if connection is None:
         return jsonify({"message": "Database connection failed"}), 500
-    cursor = connection.cursor(dictionary=True)
+    cursor = connection.cursor(pymysql.cursors.DictCursor)
     
     try:
-        cursor.callproc("newManager", (event_id, data["id"],))
+        cursor.callproc("AssignManager", (data["id"], event_id,))
         cursor.close()
         connection.close()
         return jsonify({"message": "added manager"}), 200
-    except:
-        cursor.close()
-        connection.close()
-        return jsonify({"message": "could not add manager"}), 400  
-    
+    except Exception as e:
+            cursor.close()
+            connection.close()
+            return jsonify({"message": f"could not add manager: {str(e)}"}), 401  
+
 @app.route("/events/<int:event_id>/registrations", defaults={"registration_id": None}, methods =["GET"])
 @app.route("/events/<int:event_id>/registrations/<int:registration_id>", methods =["PUT", "DELETE"])
 def registrations(event_id, registration_id = None):
@@ -320,17 +353,18 @@ def registrations(event_id, registration_id = None):
         connection = get_db_connection()  # Establish a database connection
         if connection is None:
             return jsonify({"message": "Database connection failed"}), 500
-        cursor = connection.cursor(dictionary=True)
+        cursor = connection.cursor(pymysql.cursors.DictCursor)
         
         try:
-            rows = cursor.callproc("allEventsByAdmin", (data["id"]))
+            cursor.callproc("GetManagedEvents", (data["id"],))
+            rows = cursor.fetchall()
             cursor.close()
             connection.close()
             return jsonify({"message": rows})
-        except:
+        except Exception as e:
             cursor.close()
             connection.close()
-            return jsonify({"message": "unable to get info"}), 400
+            return jsonify({"message": f"unable to get info: {str(e)}"}), 401  
             
         
     if request.method == "PUT":
@@ -340,10 +374,10 @@ def registrations(event_id, registration_id = None):
         connection = get_db_connection()  # Establish a database connection
         if connection is None:
             return jsonify({"message": "Database connection failed"}), 500
-        cursor = connection.cursor(dictionary=True)
+        cursor = connection.cursor(pymysql.cursors.DictCursor)
         
         try:
-            cursor.callproc("updateRegistration", registration_id, data["id"] , event_id,)
+            cursor.callproc("updateRegistration", (registration_id, data["id"] , event_id,))
             cursor.close()
             connection.close()
             return jsonify({"message": "updated registration"}), 200
@@ -359,7 +393,7 @@ def registrations(event_id, registration_id = None):
         connection = get_db_connection()  # Establish a database connection
         if connection is None:
             return jsonify({"message": "Database connection failed"}), 500
-        cursor = connection.cursor(dictionary=True)
+        cursor = connection.cursor(pymysql.cursors.DictCursor)
         
         try:
             cursor.callproc("deleteManagerFromEvent", data["id"], event_id,)
@@ -371,20 +405,21 @@ def registrations(event_id, registration_id = None):
             connection.close()
             return jsonify({"message": "unable to delete manager"}), 400
             
-        #print(f"deleted user from event {event_id} register id: {registration_id}")
-    
-@app.route("/users", defaults={"id": None}, methods= ["GET", "POST"])
-@app.route("/users/<int:id>", methods= ["GET", "PUT", "DELETE"])
+        #print(f"deleted user from event {event_id} register id: {registration_id}") """
+
+@app.route("/users", defaults={"id": None}, methods= ["GET"])
+@app.route("/users/<int:id>", methods= ["GET", "PUT"])
 def users(id = None):
     if request.method == "GET":
         if id is None:
             connection = get_db_connection()  # Establish a database connection
             if connection is None:
                 return jsonify({"message": "Database connection failed"}), 500
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor(pymysql.cursors.DictCursor)
             
             try:
-                rows = cursor.callproc("getAllUsers",)
+                cursor.callproc("GetAllUsers",)
+                rows = cursor.fetchall()
                 cursor.close()
                 connection.close()
                 return jsonify({"message": rows}), 200
@@ -398,10 +433,11 @@ def users(id = None):
         connection = get_db_connection()  # Establish a database connection
         if connection is None:
             return jsonify({"message": "Database connection failed"}), 500
-        cursor = connection.cursor(dictionary=True)
+        cursor = connection.cursor(pymysql.cursors.DictCursor)
         
         try:
-            row = cursor.callproc("getUserByID", id,)
+            cursor.callproc("GetUserByID", (id,))
+            row = cursor.fetchall()
             cursor.close()
             connection.close()
             return jsonify({"message": row}), 200
@@ -409,27 +445,7 @@ def users(id = None):
             cursor.close()
             connection.close()
             return jsonify({"message": f"unable to get data on id {id}"}), 400
-    
-    if request.method == "POST":
-        data = request.get_json()
-        if not data:
-            return jsonify({"message": "Invalid JSON or missing Content-Type"}), 400
         
-        connection = get_db_connection()  # Establish a database connection
-        if connection is None:
-            return jsonify({"message": "Database connection failed"}), 500
-        cursor = connection.cursor(dictionary=True)
-        
-        try:
-            cursor.callproc("assignMultipleManagers", id, data["ids"],)
-            cursor.close()
-            connection.close()
-            return jsonify({"message": "added new manager(s)"}), 200
-        except:
-            cursor.close()
-            connection.close()
-            return jsonify({"message": "unable to add manager(s)"}), 400
-    
     if request.method == "PUT":
         data = request.get_json()
         if not data:
@@ -438,20 +454,20 @@ def users(id = None):
         connection = get_db_connection()  # Establish a database connection
         if connection is None:
             return jsonify({"message": "Database connection failed"}), 500
-        cursor = connection.cursor(dictionary=True)
+        cursor = connection.cursor(pymysql.cursors.DictCursor)
         
         try:
-            cursor.callproc("updateUserInfo", id, data["first_name"], data["last_name"], data["email"])
+            cursor.callproc("UpdateUser", (id, data["first_name"], data["last_name"], data["email"],))
+            connection.commit() 
             cursor.close()
             connection.close()
             return jsonify({"message": "user info updated"}), 200
-        except:
+        except Exception as e:
             cursor.close()
             connection.close()
-            return jsonify({"message": "unable to update user info"}), 400
+            return jsonify({"message": f"unable to update user info: {str(e)}"}), 401 
     
-
-    if request.method == "DELETE":
+"""     if request.method == "POST":
         data = request.get_json()
         if not data:
             return jsonify({"message": "Invalid JSON or missing Content-Type"}), 400
@@ -459,18 +475,60 @@ def users(id = None):
         connection = get_db_connection()  # Establish a database connection
         if connection is None:
             return jsonify({"message": "Database connection failed"}), 500
-        cursor = connection.cursor(dictionary=True)
+        cursor = connection.cursor(pymysql.cursors.DictCursor)
         
         try:
-            cursor.callproc("removeMultipleManagers", id, data["ids"], )
+            cursor.callproc("AssignMultipleManagers", id, data["ids"],)
+            connection.commit()
+            cursor.close()
+            connection.close()
+            return jsonify({"message": "added new manager(s)"}), 200
+        except:
+            cursor.close()
+            connection.close()
+            return jsonify({"message": "unable to add manager(s)"}), 400 """
+
+"""     if request.method == "DELETE":
+        data = request.get_json()
+        if not data:
+            return jsonify({"message": "Invalid JSON or missing Content-Type"}), 400
+        
+        connection = get_db_connection()  # Establish a database connection
+        if connection is None:
+            return jsonify({"message": "Database connection failed"}), 500
+        cursor = connection.cursor(pymysql.cursors.DictCursor)
+        
+        try:
+            cursor.callproc("RemoveMultipleManagers", id, data["ids"], )
             cursor.close()
             connection.close()
             return jsonify({"message": "deleted managers"}), 200
         except:
             cursor.close()
             connection.close()
-            return jsonify({"message": "unable to delete managers"}), 400
+            return jsonify({"message": "unable to delete managers"}), 400"""
     
+if __name__ == '__main__':
+    #app.run(port=5000, debug=True)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+    #app.run(host='0.0.0.0', port=8080)
+
+
+    # User class for session management
+class User:
+    def __init__(self, user_id, email, name):
+        self.id = user_id
+        self.email = email
+        self.name = name
+        self.is_authenticated = True
+        self.is_active = True
+        self.is_anonymous = False
+
+    def get_id(self):
+        return str(self.id)
+
+# Helper to load user from session or database
+def load_user(user_id):
 
 @app.route("/")
 def home():
@@ -905,8 +963,3 @@ def handle_event_document(event_id):
         if connection:
             connection.close()
         return jsonify({"message": f"Error handling event document: {str(e)}"}), 500
-
-
-if __name__ == '__main__':
-    app.run(port=5000, debug=True)
-
