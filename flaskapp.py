@@ -24,6 +24,9 @@ import mysql.connector
 from mysql.connector import Error
 from google.cloud.sql.connector import Connector
 import sqlalchemy
+from google.cloud import storage
+import uuid
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 CORS(app)
@@ -533,6 +536,375 @@ def callback():
 def logout():
     session.pop("user", None)
     return redirect(url_for("home"))
+
+
+#Google Cloud storage helper
+# Add this helper function to handle Google Cloud Storage operations
+def get_storage_client():
+    """Returns a Google Cloud Storage client."""
+    return storage.Client()
+
+
+def upload_file_to_gcs(file, bucket_name="t4-backend", folder="event_images"):
+    """
+    Uploads a file to Google Cloud Storage bucket
+    
+    Args:
+        file: The file object to upload
+        bucket_name: Name of the GCS bucket
+        folder: Folder name within the bucket
+        
+    Returns:
+        Public URL of the uploaded file or None if upload fails
+    """
+    try:
+        # Generate a secure filename with a UUID to prevent name collisions
+        original_filename = secure_filename(file.filename)
+        filename_parts = original_filename.rsplit('.', 1)
+        
+        if len(filename_parts) > 1:
+            ext = filename_parts[1].lower()
+            unique_filename = f"{uuid.uuid4().hex}.{ext}"
+        else:
+            unique_filename = f"{uuid.uuid4().hex}"
+            
+        # Path in the bucket where the file will be stored
+        destination_blob_name = f"{folder}/{unique_filename}"
+        
+        # Get the storage client and bucket
+        storage_client = get_storage_client()
+        bucket = storage_client.bucket(bucket_name)
+        blob = bucket.blob(destination_blob_name)
+        
+        # Upload the file
+        blob.upload_from_file(file, content_type=file.content_type)
+        
+        # Make the blob publicly accessible
+        blob.make_public()
+        
+        # Return the public URL
+        return blob.public_url
+    
+    except Exception as e:
+        print(f"Error uploading file to GCS: {e}")
+        return None
+    
+def delete_file_from_gcs(file_url, bucket_name="t4-backend"):
+    """
+    Deletes a file from Google Cloud Storage based on the URL
+    
+    Args:
+        file_url: Public URL of the file to delete
+        bucket_name: Name of the GCS bucket
+        
+    Returns:
+        Boolean indicating success or failure
+    """
+    try:
+        # Extract the blob name from the URL
+        # URL format: https://storage.googleapis.com/BUCKET_NAME/BLOB_NAME
+        blob_name = file_url.split(f"https://storage.googleapis.com/{bucket_name}/")[1]
+        
+        # Get the storage client and bucket
+        storage_client = get_storage_client()
+        bucket = storage_client.bucket(bucket_name)
+        blob = bucket.blob(blob_name)
+        
+        # Delete the blob
+        blob.delete()
+        return True
+    
+    except Exception as e:
+        print(f"Error deleting file from GCS: {e}")
+        return False
+
+
+#endpoint for image handling
+@app.route("/events/<int:event_id>/image", methods=["POST", "GET", "DELETE"])
+def handle_event_image(event_id):
+    # Check if event exists
+    connection = get_db_connection()
+    if connection is None:
+        return jsonify({"message": "Database connection failed"}), 500
+    
+    cursor = connection.cursor(dictionary=True)
+    
+    try:
+        # Verify the event exists
+        query = sqlalchemy.text("SELECT event_id FROM Event WHERE event_id = :event_id")
+        result = connection.execute(query, {"event_id": event_id})
+        event = result.fetchone()
+        
+        if not event:
+            cursor.close()
+            connection.close()
+            return jsonify({"message": f"Event with ID {event_id} not found"}), 404
+        
+        # Handle image upload
+        if request.method == "POST":
+            # Check if file is in the request
+            if 'image' not in request.files:
+                cursor.close()
+                connection.close()
+                return jsonify({"message": "No image file provided"}), 400
+            
+            file = request.files['image']
+            
+            # Check if file has a name
+            if file.filename == '':
+                cursor.close()
+                connection.close()
+                return jsonify({"message": "No selected file"}), 400
+            
+            # Check file extension
+            allowed_extensions = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+            if '.' not in file.filename or file.filename.rsplit('.', 1)[1].lower() not in allowed_extensions:
+                cursor.close()
+                connection.close()
+                return jsonify({"message": "Invalid file type. Allowed types: png, jpg, jpeg, gif, webp"}), 400
+            
+            # Upload to GCS
+            file_url = upload_file_to_gcs(file)
+            if not file_url:
+                cursor.close()
+                connection.close()
+                return jsonify({"message": "Failed to upload image"}), 500
+            
+            # Check if there's already an image for this event
+            query = sqlalchemy.text("SELECT detail_id, image_url FROM Event_Detail WHERE event_id = :event_id")
+            result = connection.execute(query, {"event_id": event_id})
+            existing_detail = result.fetchone()
+            
+            if existing_detail:
+                # Update existing record
+                old_image_url = existing_detail.image_url
+                
+                # Delete old image if it exists
+                if old_image_url:
+                    delete_file_from_gcs(old_image_url)
+                
+                # Update record
+                update_query = sqlalchemy.text(
+                    "UPDATE Event_Detail SET image_url = :image_url, updated_at = CURRENT_TIMESTAMP WHERE detail_id = :detail_id"
+                )
+                connection.execute(update_query, {
+                    "image_url": file_url,
+                    "detail_id": existing_detail.detail_id
+                })
+            else:
+                # Create new record
+                insert_query = sqlalchemy.text(
+                    "INSERT INTO Event_Detail (event_id, image_url) VALUES (:event_id, :image_url)"
+                )
+                connection.execute(insert_query, {
+                    "event_id": event_id,
+                    "image_url": file_url
+                })
+            
+            connection.commit()
+            cursor.close()
+            connection.close()
+            return jsonify({
+                "message": "Image uploaded successfully",
+                "image_url": file_url
+            }), 201
+        
+        # Handle image retrieval
+        elif request.method == "GET":
+            query = sqlalchemy.text("SELECT image_url FROM Event_Detail WHERE event_id = :event_id")
+            result = connection.execute(query, {"event_id": event_id})
+            detail = result.fetchone()
+            
+            cursor.close()
+            connection.close()
+            
+            if not detail or not detail.image_url:
+                return jsonify({"message": "No image found for this event"}), 404
+            
+            return jsonify({
+                "message": "Image retrieved successfully",
+                "image_url": detail.image_url
+            }), 200
+        
+        # Handle image deletion
+        elif request.method == "DELETE":
+            query = sqlalchemy.text("SELECT detail_id, image_url FROM Event_Detail WHERE event_id = :event_id")
+            result = connection.execute(query, {"event_id": event_id})
+            detail = result.fetchone()
+            
+            if not detail or not detail.image_url:
+                cursor.close()
+                connection.close()
+                return jsonify({"message": "No image found for this event"}), 404
+            
+            # Delete from GCS
+            deleted = delete_file_from_gcs(detail.image_url)
+            if not deleted:
+                cursor.close()
+                connection.close()
+                return jsonify({"message": "Failed to delete image from storage"}), 500
+            
+            # Update database
+            update_query = sqlalchemy.text(
+                "UPDATE Event_Detail SET image_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE detail_id = :detail_id"
+            )
+            connection.execute(update_query, {"detail_id": detail.detail_id})
+            connection.commit()
+            
+            cursor.close()
+            connection.close()
+            return jsonify({"message": "Image deleted successfully"}), 200
+    
+    except Exception as e:
+        if cursor:
+            cursor.close()
+        if connection:
+            connection.close()
+        return jsonify({"message": f"Error handling event image: {str(e)}"}), 500
+    
+    
+#endpoint for document handling
+@app.route("/events/<int:event_id>/document", methods=["POST", "GET", "DELETE"])
+def handle_event_document(event_id):
+    # Check if event exists
+    connection = get_db_connection()
+    if connection is None:
+        return jsonify({"message": "Database connection failed"}), 500
+    
+    cursor = connection.cursor(dictionary=True)
+    
+    try:
+        # Verify the event exists
+        query = sqlalchemy.text("SELECT event_id FROM Event WHERE event_id = :event_id")
+        result = connection.execute(query, {"event_id": event_id})
+        event = result.fetchone()
+        
+        if not event:
+            cursor.close()
+            connection.close()
+            return jsonify({"message": f"Event with ID {event_id} not found"}), 404
+        
+        # Handle document upload
+        if request.method == "POST":
+            # Check if file is in the request
+            if 'document' not in request.files:
+                cursor.close()
+                connection.close()
+                return jsonify({"message": "No document file provided"}), 400
+            
+            file = request.files['document']
+            
+            # Check if file has a name
+            if file.filename == '':
+                cursor.close()
+                connection.close()
+                return jsonify({"message": "No selected file"}), 400
+            
+            # Check file extension
+            allowed_extensions = {'pdf', 'doc', 'docx', 'ppt', 'pptx', 'txt'}
+            if '.' not in file.filename or file.filename.rsplit('.', 1)[1].lower() not in allowed_extensions:
+                cursor.close()
+                connection.close()
+                return jsonify({"message": "Invalid file type. Allowed types: pdf, doc, docx, ppt, pptx, txt"}), 400
+            
+            # Upload to GCS
+            file_url = upload_file_to_gcs(file, folder="event_documents")
+            if not file_url:
+                cursor.close()
+                connection.close()
+                return jsonify({"message": "Failed to upload document"}), 500
+            
+            # Check if there's already a document for this event
+            query = sqlalchemy.text("SELECT detail_id, document_url FROM Event_Detail WHERE event_id = :event_id")
+            result = connection.execute(query, {"event_id": event_id})
+            existing_detail = result.fetchone()
+            
+            if existing_detail:
+                # Update existing record
+                old_document_url = existing_detail.document_url
+                
+                # Delete old document if it exists
+                if old_document_url:
+                    delete_file_from_gcs(old_document_url)
+                
+                # Update record
+                update_query = sqlalchemy.text(
+                    "UPDATE Event_Detail SET document_url = :document_url, updated_at = CURRENT_TIMESTAMP WHERE detail_id = :detail_id"
+                )
+                connection.execute(update_query, {
+                    "document_url": file_url,
+                    "detail_id": existing_detail.detail_id
+                })
+            else:
+                # Create new record
+                insert_query = sqlalchemy.text(
+                    "INSERT INTO Event_Detail (event_id, document_url) VALUES (:event_id, :document_url)"
+                )
+                connection.execute(insert_query, {
+                    "event_id": event_id,
+                    "document_url": file_url
+                })
+            
+            connection.commit()
+            cursor.close()
+            connection.close()
+            return jsonify({
+                "message": "Document uploaded successfully",
+                "document_url": file_url
+            }), 201
+        
+        # Handle document retrieval
+        elif request.method == "GET":
+            query = sqlalchemy.text("SELECT document_url FROM Event_Detail WHERE event_id = :event_id")
+            result = connection.execute(query, {"event_id": event_id})
+            detail = result.fetchone()
+            
+            cursor.close()
+            connection.close()
+            
+            if not detail or not detail.document_url:
+                return jsonify({"message": "No document found for this event"}), 404
+            
+            return jsonify({
+                "message": "Document retrieved successfully",
+                "document_url": detail.document_url
+            }), 200
+        
+        # Handle document deletion
+        elif request.method == "DELETE":
+            query = sqlalchemy.text("SELECT detail_id, document_url FROM Event_Detail WHERE event_id = :event_id")
+            result = connection.execute(query, {"event_id": event_id})
+            detail = result.fetchone()
+            
+            if not detail or not detail.document_url:
+                cursor.close()
+                connection.close()
+                return jsonify({"message": "No document found for this event"}), 404
+            
+            # Delete from GCS
+            deleted = delete_file_from_gcs(detail.document_url)
+            if not deleted:
+                cursor.close()
+                connection.close()
+                return jsonify({"message": "Failed to delete document from storage"}), 500
+            
+            # Update database
+            update_query = sqlalchemy.text(
+                "UPDATE Event_Detail SET document_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE detail_id = :detail_id"
+            )
+            connection.execute(update_query, {"detail_id": detail.detail_id})
+            connection.commit()
+            
+            cursor.close()
+            connection.close()
+            return jsonify({"message": "Document deleted successfully"}), 200
+    
+    except Exception as e:
+        if cursor:
+            cursor.close()
+        if connection:
+            connection.close()
+        return jsonify({"message": f"Error handling event document: {str(e)}"}), 500
 
 
 if __name__ == '__main__':
