@@ -1,12 +1,16 @@
-from flask import Flask, request, jsonify, send_file, session
+from flask import Flask, request, jsonify, send_file, session, request, url_for, redirect
 from flask_cors import CORS
 from io import StringIO
+from functools import wraps
 import os
 import json
-import time
 from threading import Timer
 import mysql.connector
 from mysql.connector import Error
+import datetime
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
+
 from authlib.integrations.flask_client import OAuth
 
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
@@ -30,7 +34,7 @@ limiter = Limiter(
     default_limits=["5 per second", "50 per minute"],
 )
 # Explicitly set the path to your service account key
-os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = r'./t4-backend-469434088c8d.json'
+os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = r'./t4-backend-ce84965061ed.json'
 def load_credentials():
     try:
         credentials, project = google.auth.default()
@@ -45,18 +49,25 @@ app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", secrets.token_hex(32))
 app.config["SESSION_TYPE"] = "filesystem"
 Session(app)
 
-# OAuth Setup
+
+app.config["GOOGLE_CLIENT_ID"] = os.getenv("GOOGLE_CLIENT_ID")
+app.config["GOOGLE_CLIENT_SECRET"] = os.getenv("GOOGLE_CLIENT_SECRET")
+
 oauth = OAuth(app)
 google = oauth.register(
-    name='google',
-    client_id=os.getenv('GOOGLE_CLIENT_ID'),  # Set in environment variables
-    client_secret=os.getenv('GOOGLE_CLIENT_SECRET'),  # Set in environment variables
-    authorize_url='https://accounts.google.com/o/oauth2/auth',
-    token_url='https://accounts.google.com/o/oauth2/token',
-    userinfo_endpoint='https://www.googleapis.com/oauth2/v3/userinfo',
-    client_kwargs={'scope': 'openid email profile'},
-    redirect_uri='http://localhost:5000/authorize/google'  # Adjust for production
+    name="google",
+    client_id=app.config["GOOGLE_CLIENT_ID"],
+    client_secret=app.config["GOOGLE_CLIENT_SECRET"],
+    authorize_url="https://accounts.google.com/o/oauth2/auth",
+    authorize_params=None,
+    access_token_url="https://oauth2.googleapis.com/token",
+    access_token_params=None,
+    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+    client_kwargs={"scope": "openid email profile"},
+    api_base_url="https://www.googleapis.com/oauth2/v1/",
 )
+
+
 
 
 
@@ -65,7 +76,7 @@ connector = Connector()
 # function to return the database connection object
 def getconn():
     conn = connector.connect(
-        instance_connection_string=os.getenv('INSTANCE_CONNECTION_STRING'),  # e.g. "project:region:instance"
+        instance_connection_string=os.getenv('INSTANCE_CONNECTION_STRING'),  
         driver="pymysql",
         user=os.getenv('DB_USER'),
         password=os.getenv('DB_PASS'),
@@ -144,10 +155,33 @@ def test_database_connection():
         # Close the connection if it's still open
         if connection:
             connection.close()
-                   
-@app.route("/test")
-def test():
-    return jsonify({"message":"helllo"})     
+
+def call_procedure(procedure_name, params=()):
+    connection = get_db_connection()
+    if connection is None:
+        return []
+    
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.callproc(procedure_name, params)
+        
+        # Get results from all result sets
+        results = []
+        for result in cursor.stored_results():
+            results.extend(result.fetchall())
+            
+        connection.commit()
+        return results
+    except Error as e:
+        print(f"Error calling procedure {procedure_name}: {e}")
+        return []
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
+
+            
+            
 
 @app.route("/events", defaults={"event_id": None}, methods=["GET", "POST"])
 @app.route("/events/<int:event_id>", methods=["GET", "PUT", "DELETE"])
@@ -434,95 +468,73 @@ def users(id = None):
             connection.close()
             return jsonify({"message": "unable to delete managers"}), 400
     
+
+@app.route("/")
+def home():
+    user = session.get("user")
+    print(user)
+    return f"Hello, {user['name']}!" if user else "Hello, Guest! <a href='/login'>Login with Google</a>"
+
+@app.route("/login")
+def login():
+    return google.authorize_redirect(url_for("callback", _external=True))
+
+@app.route("/login-failed")
+def failed_login():
+    return f"Login Failed"
+
+
+@app.route("/callback")
+def callback():
+    token = google.authorize_access_token()
+    user = google.get("userinfo").json()  
+
+
+    user_email = user.get("email")
+    if not user_email:
+        session.pop("user", None)
+        return redirect(url_for("failed_login") + "?error=Email not provided by Google")
+
+    print(user_email)
+    allowed_domain = "gmail.com"  
+    if not (user_email == "sales.club@westernusc.ca" or "westernsalesclub@gmail.com"):
+        session.pop("user", None)
+        return redirect(url_for("failed_login") + "?error=Only users from " + allowed_domain + " are allowed to sign in")
+
+    # if we want to allow people form the DB
+    # connection = get_db_connection()
+    # if connection is None:
+    #     session.pop("user", None)
+    #     return redirect(url_for("home") + "?error=Database connection failed")
+
+    try:
+
+        # query = sqlalchemy.text("SELECT * FROM User WHERE email = :email")
+        # result = connection.execute(query, {"email": user_email})
+        # user_record = result.fetchone()
+
+        # if not user_record:
+        #     session.pop("user", None)
+        #     return redirect(url_for("home") + "?error=User not found in the database")
+
+        session["user"] = user
+        return redirect(url_for("home"))
+
+    except Exception as e:
+        session.pop("user", None)
+        return redirect(url_for("failed_login") + "?error=Error checking user: " + str(e))
+
+    # finally:
+        # if connection:
+        #     connection.close()
+
+# Route: Logout
+@app.route("/logout")
+def logout():
+    session.pop("user", None)
+    return redirect(url_for("home"))
+
+
 if __name__ == '__main__':
     app.run(port=5000, debug=True)
 
-
-    # User class for session management
-class User:
-    def __init__(self, user_id, email, name):
-        self.id = user_id
-        self.email = email
-        self.name = name
-        self.is_authenticated = True
-        self.is_active = True
-        self.is_anonymous = False
-
-    def get_id(self):
-        return str(self.id)
-
-# Helper to load user from session or database
-def load_user(user_id):
-    connection = get_db_connection()
-    if connection:
-        cursor = connection.cursor(dictionary=True)
-        cursor.execute("SELECT id, email, name FROM users WHERE id = %s", (user_id,))
-        user_data = cursor.fetchone()
-        cursor.close()
-        connection.close()
-        if user_data:
-            return User(user_data['id'], user_data['email'], user_data['name'])
-    return None
-
-# OAuth 2.0 Login Route
-@app.route("/login", methods=["GET"])
-def login():
-    redirect_uri = url_for('authorize', _external=True)
-    return google.authorize_redirect(redirect_uri)
-
-# OAuth 2.0 Authorization Callback
-@app.route("/authorize")
-def authorize():
-    token = google.authorize_access_token()
-    user_info = google.get('userinfo').json()
-    
-    email = user_info['email']
-    name = user_info['name']
-    
-    # Check if user exists, or create a new one
-    connection = get_db_connection()
-    if connection:
-        cursor = connection.cursor(dictionary=True)
-        cursor.execute("SELECT id, email, name FROM users WHERE email = %s", (email,))
-        user_data = cursor.fetchone()
-        
-        if not user_data:
-            # Register new user
-            cursor.execute(
-                "INSERT INTO users (email, name) VALUES (%s, %s)",
-                (email, name)
-            )
-            connection.commit()
-            cursor.execute("SELECT id, email, name FROM users WHERE email = %s", (email,))
-            user_data = cursor.fetchone()
-        
-        user = User(user_data['id'], user_data['email'], user_data['name'])
-        session['user_id'] = user.id  # Store user ID in session
-        cursor.close()
-        connection.close()
-        
-        return redirect(url_for('protected'))
-    
-    return jsonify({"message": "Authentication failed"}), 401
-
-# Logout Route
-@app.route("/logout", methods=["POST"])
-def logout():
-    session.pop('user_id', None)
-    return jsonify({"message": "Logged out"}), 200
-
-# Setup to register a none logged in user to an event
-@app.route("/register", methods=["POST"])
-def register():
-    return jsonify({"message": "Registration handled via OAuth. Use /login instead."}), 200
-
-# Protected Route Example
-@app.route("/protected", methods=["GET"])
-def protected():
-    user_id = session.get('user_id')
-    if not user_id:
-        return jsonify({"message": "Unauthorized"}), 401
-    user = load_user(user_id)
-    if user:
-        return jsonify({"message": f"Welcome, {user.name}!"}), 200
-    return jsonify({"message": "User not found"}), 404
