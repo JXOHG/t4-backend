@@ -94,7 +94,8 @@ def get_db_connection():
             host='34.130.106.77',  
             user=os.getenv('DB_USER'),
             password=os.getenv('DB_PASS'),
-            database=os.getenv('DB_NAME')
+            database=os.getenv('DB_NAME'),
+            autocommit=True
         )
         return connection
     except Error as e:
@@ -176,106 +177,81 @@ def call_procedure(procedure_name, params=()):
 
 @app.route("/events", defaults={"event_id": None}, methods=["GET", "POST"])
 @app.route("/events/<int:event_id>", methods=["GET", "PUT", "DELETE"])
-def events(event_id = None):
-    connection = get_db_connection()  # Establish a database connection
+def events(event_id=None):
+    connection = get_db_connection()
     if connection is None:
         return jsonify({"message": "Database connection failed"}), 500
+
     cursor = connection.cursor(dictionary=True)
-        
-    if request.method == 'GET':
-        if event_id is None:
-            #print("return full db")
-            
-            try:
-                rows = cursor.callproc("getUpcomingEvents")
+
+    try:
+        if request.method == 'GET':
+            if event_id is None:
+                # Get all upcoming events
+                cursor.callproc("getUpcomingEvents")
                 results = []
                 for result in cursor.stored_results():
-                    results = result.fetchall() 
-                cursor.close()
-                connection.close()
+                    results.extend(result.fetchall())
                 return jsonify({"message": results}), 200
-            except:
-                cursor.close()
-                connection.close()
-                return jsonify({"message": "error calling all events"}), 401
-                
-        
-        #print(f"Fetching event with id: {event_id}")
-        try:
-            row = cursor.callproc("eventDetailByID")
-            cursor.close()
-            connection.close()
-            return jsonify({"message": row}), 200
-        except:
-            cursor.close()
-            connection.close()
-            return jsonify({"message": "error fetching event"}), 401 
+            else:
+                # Get specific event details
+                cursor.callproc("GetEventDetails", [event_id])
+                results = []
+                for result in cursor.stored_results():
+                    results.extend(result.fetchall())
+                if not results:
+                    return jsonify({"message": f"No event found with id {event_id}"}), 404
+                return jsonify({"message": results}), 200
 
-    elif request.method == 'POST':
-        #print("create event")
-        data = request.get_json()
-        if not data:
-            cursor.close()
-            connection.close()
-            return jsonify({"message": "Invalid JSON or missing Content-Type"}), 400
-        
-        try: 
-            title = data["title"]
-            description = data["description"]
-            eventDate = data["eventDate"]
-            location = data["location"]
-        except:
-            cursor.close()
-            connection.close()
-            return jsonify({"message": "Missing data"}), 400
-        
-        cursor.callproc("createEvent",(title, description, eventDate, location,))
+        elif request.method == 'POST':
+            data = request.get_json()
+            if not data:
+                return jsonify({"message": "Invalid JSON or missing Content-Type"}), 400
 
+            try:
+                title = data["title"]
+                description = data["description"]
+                eventDate = data["eventDate"]
+                location = data["location"]
+            except KeyError as e:
+                return jsonify({"message": f"Missing key: {str(e)}"}), 400
+
+            cursor.callproc("createEvent", (title, description, eventDate, location))
+            return jsonify({"message": "Created event"}), 201
+
+        elif request.method == 'PUT':
+            if event_id is None:
+                return jsonify({"message": "Missing event_id for update"}), 400
+
+            data = request.get_json()
+            if not data:
+                return jsonify({"message": "Invalid JSON or missing Content-Type"}), 400
+
+            try:
+                title = data["title"]
+                description = data["description"]
+                eventDate = data["eventDate"]
+                location = data["location"]
+            except KeyError as e:
+                return jsonify({"message": f"Missing key: {str(e)}"}), 400
+
+            cursor.callproc("updateEvent", (event_id, title, description, eventDate, location))
+            return jsonify({"message": "Updated event"}), 200
+
+        elif request.method == 'DELETE':
+            if event_id is None:
+                return jsonify({"message": "Missing event_id for delete"}), 400
+
+            cursor.callproc("deleteEvent", (event_id,))
+            return jsonify({"message": "Deleted event"}), 200
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"message": "An error occurred"}), 500
+
+    finally:
         cursor.close()
         connection.close()
-        return jsonify({"message": "Created event"}), 201
-        
-    elif request.method == 'PUT':
-        #print(f"editing event with id: {event_id}")
-    
-        data = request.get_json()
-        if not data:
-            cursor.close()
-            connection.close()
-            return jsonify({"message": "Invalid JSON or missing Content-Type"}), 400
-        
-        try:
-            title = data["title"]
-            description = data["description"]
-            eventDate = data["eventDate"]
-            location = data["location"]
-        except:
-            cursor.close()
-            connection.close()
-            return jsonify({"message": "Missing data"}), 400
-        
-        try:
-            cursor.callproc("updateEvent",(event_id, title, description, eventDate, location,))
-            cursor.close()
-            connection.close()
-            return jsonify({"message": "Updated event"}), 200
-        except:
-            cursor.close()
-            connection.close()
-            return jsonify({"message": "error updating event"}), 401
-        
-    elif request.method == 'DELETE':
-        #print(f"deleting event with id: {event_id}")
-        try:
-            cursor.callproc("deleteEvent",(event_id,))
-            cursor.close()
-            connection.close()
-            return jsonify({"message": "deleted event"}), 200
-        except:
-            cursor.close()
-            connection.close()
-            return jsonify({"message": "event cannot be deleted"}), 401
-    
 
 @app.route("/events/<int:event_id>/register", methods=["POST"])
 def register_user(event_id):
@@ -537,19 +513,11 @@ def get_storage_client():
 
 
 def upload_file_to_gcs(file, bucket_name="t4-backend", folder="event_images"):
-    """
-    Uploads a file to Google Cloud Storage bucket
-    
-    Args:
-        file: The file object to upload
-        bucket_name: Name of the GCS bucket
-        folder: Folder name within the bucket
-        
-    Returns:
-        Public URL of the uploaded file or None if upload fails
-    """
     try:
-        # Generate a secure filename with a UUID to prevent name collisions
+        # Reset file pointer to beginning
+        file.seek(0)
+        
+        # Generate a secure filename with a UUID
         original_filename = secure_filename(file.filename)
         filename_parts = original_filename.rsplit('.', 1)
         
@@ -559,7 +527,7 @@ def upload_file_to_gcs(file, bucket_name="t4-backend", folder="event_images"):
         else:
             unique_filename = f"{uuid.uuid4().hex}"
             
-        # Path in the bucket where the file will be stored
+        # Path in the bucket
         destination_blob_name = f"{folder}/{unique_filename}"
         
         # Get the storage client and bucket
@@ -570,11 +538,11 @@ def upload_file_to_gcs(file, bucket_name="t4-backend", folder="event_images"):
         # Upload the file
         blob.upload_from_file(file, content_type=file.content_type)
         
-        # Make the blob publicly accessible
-        blob.make_public()
+        # Instead of make_public() for uniform bucket-level access:
+        # Just construct the public URL based on the bucket and object name
+        public_url = f"https://storage.googleapis.com/{bucket_name}/{destination_blob_name}"
         
-        # Return the public URL
-        return blob.public_url
+        return public_url
     
     except Exception as e:
         print(f"Error uploading file to GCS: {e}")
@@ -613,70 +581,115 @@ def delete_file_from_gcs(file_url, bucket_name="t4-backend"):
 #endpoint for image handling
 @app.route("/events/<int:event_id>/image", methods=["POST", "GET", "DELETE"])
 def handle_event_image(event_id):
-    # Check if event exists
     connection = get_db_connection()
     if connection is None:
         return jsonify({"message": "Database connection failed"}), 500
-    
+
     cursor = connection.cursor(dictionary=True)
-    
+
     try:
-        # Verify the event exists
+        # 1. Check if event exists
         cursor.execute("SELECT event_id FROM Event WHERE event_id = %s", (event_id,))
         event = cursor.fetchone()
-        
+
         if not event:
             cursor.close()
             connection.close()
             return jsonify({"message": f"Event with ID {event_id} not found"}), 404
-        
-        # Handle image upload
+
+        # 2. Handle POST - Upload image
         if request.method == "POST":
-            # Check if file is in the request
             if 'image' not in request.files:
                 cursor.close()
                 connection.close()
                 return jsonify({"message": "No image file provided"}), 400
-            
+
             file = request.files['image']
-            
-            # Rest of the code remains the same...
-            # ...
-            
-            # Query modified to use MySQL connector
+
+            if file.filename == '':
+                cursor.close()
+                connection.close()
+                return jsonify({"message": "No selected file"}), 400
+
+            allowed_extensions = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+            if '.' not in file.filename or file.filename.rsplit('.', 1)[1].lower() not in allowed_extensions:
+                cursor.close()
+                connection.close()
+                return jsonify({"message": "Invalid file type. Allowed types: png, jpg, jpeg, gif, webp"}), 400
+
+            # Upload to GCS
+            file_url = upload_file_to_gcs(file)
+            if not file_url:
+                cursor.close()
+                connection.close()
+                return jsonify({"message": "Failed to upload image"}), 500
+
+            # Check if image already exists
             cursor.execute("SELECT detail_id, image_url FROM Event_Detail WHERE event_id = %s", (event_id,))
             existing_detail = cursor.fetchone()
-            
+
             if existing_detail:
-                # Update existing record
-                old_image_url = existing_detail['image_url']
-                
-                # Delete old image if it exists
+                old_image_url = existing_detail["image_url"]
                 if old_image_url:
                     delete_file_from_gcs(old_image_url)
-                
-                # Update record
+
                 cursor.execute(
                     "UPDATE Event_Detail SET image_url = %s, updated_at = CURRENT_TIMESTAMP WHERE detail_id = %s",
-                    (file_url, existing_detail['detail_id'])
+                    (file_url, existing_detail["detail_id"])
                 )
             else:
-                # Create new record
                 cursor.execute(
                     "INSERT INTO Event_Detail (event_id, image_url) VALUES (%s, %s)",
                     (event_id, file_url)
                 )
-            
+
             connection.commit()
             cursor.close()
             connection.close()
+            return jsonify({"message": "Image uploaded successfully", "image_url": file_url}), 201
+
+        # 3. Handle GET - Retrieve image
+        elif request.method == "GET":
+            cursor.execute("SELECT image_url FROM Event_Detail WHERE event_id = %s", (event_id,))
+            detail = cursor.fetchone()
+
+            cursor.close()
+            connection.close()
+
+            if not detail or not detail["image_url"]:
+                return jsonify({"message": "No image found for this event"}), 404
+
             return jsonify({
-                "message": "Image uploaded successfully",
-                "image_url": file_url
-            }), 201
-            
-        # Other methods (GET, DELETE) would need similar changes...
-    
+                "message": "Image retrieved successfully",
+                "image_url": detail["image_url"]
+            }), 200
+
+        # 4. Handle DELETE - Remove image
+        elif request.method == "DELETE":
+            cursor.execute("SELECT detail_id, image_url FROM Event_Detail WHERE event_id = %s", (event_id,))
+            detail = cursor.fetchone()
+
+            if not detail or not detail["image_url"]:
+                cursor.close()
+                connection.close()
+                return jsonify({"message": "No image found for this event"}), 404
+
+            deleted = delete_file_from_gcs(detail["image_url"])
+            if not deleted:
+                cursor.close()
+                connection.close()
+                return jsonify({"message": "Failed to delete image from storage"}), 500
+
+            cursor.execute(
+                "UPDATE Event_Detail SET image_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE detail_id = %s",
+                (detail["detail_id"],)
+            )
+            connection.commit()
+
+            cursor.close()
+            connection.close()
+            return jsonify({"message": "Image deleted successfully"}), 200
+
     except Exception as e:
         if cursor:
             cursor.close()
