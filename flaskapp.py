@@ -86,15 +86,16 @@ connector = Connector()
 def get_db_connection():
     try:
 
+        # Connect using the Cloud SQL connector
+
         conn = connector.connect(
-            instance_connection_string=os.getenv('INSTANCE_CONNECTION_STRING'),  # e.g. "project:region:instance"
-            driver="pymysql",
+            "t4-backend:northamerica-northeast2:t4-backend-sql",
+            "pymysql",
             user=os.getenv('DB_USER'),
             password=os.getenv('DB_PASS'),
             db=os.getenv('DB_NAME')
         )
         return conn
-        
     except Exception as e:
         print(f"Error connecting to Cloud SQL: {e}")
 
