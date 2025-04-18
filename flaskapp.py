@@ -7,7 +7,7 @@ import json
 from threading import Timer
 import mysql.connector
 from mysql.connector import Error
-import datetime
+from datetime import datetime
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 
@@ -23,7 +23,8 @@ from flask_limiter.util import get_remote_address
 import mysql.connector
 from mysql.connector import Error
 from google.cloud.sql.connector import Connector
-import sqlalchemy
+
+import pymysql
 from google.cloud import storage
 import uuid
 from werkzeug.utils import secure_filename
@@ -37,7 +38,10 @@ limiter = Limiter(
     default_limits=["5 per second", "50 per minute"],
 )
 # Explicitly set the path to your service account key
-os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = r'./t4-backend-ce84965061ed.json'
+#os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = r'./t4-backend-ce84965061ed.json'
+
+#kenneth
+#os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = r't4-backend-4e28b71354cb.json'
 def load_credentials():
     try:
         credentials, project = google.auth.default()
@@ -77,59 +81,44 @@ google = oauth.register(
 # Initialize the Connector object
 connector = Connector()
 # function to return the database connection object
-def getconn():
-    conn = connector.connect(
-        instance_connection_string=os.getenv('INSTANCE_CONNECTION_STRING'),  
-        driver="pymysql",
-        user=os.getenv('DB_USER'),
-        password=os.getenv('DB_PASS'),
-        db=os.getenv('DB_NAME')
-    )
-    return conn
 
 # Database connection using MySQL Connector
 def get_db_connection():
     try:
-        connection = mysql.connector.connect(
-            host='34.130.106.77',  
+
+        conn = connector.connect(
+            instance_connection_string=os.getenv('INSTANCE_CONNECTION_STRING'),  # e.g. "project:region:instance"
+            driver="pymysql",
             user=os.getenv('DB_USER'),
             password=os.getenv('DB_PASS'),
-            database=os.getenv('DB_NAME'),
-            autocommit=True
+            db=os.getenv('DB_NAME')
         )
-        return connection
-    except Error as e:
-        print(f"Error connecting to MySQL: {e}")
+        return conn
+        
+    except Exception as e:
+        print(f"Error connecting to Cloud SQL: {e}")
+
         return None
     
-""" # Helper function for executing SQL queries
-def execute_query(query, params=()):
-    connection = get_db_connection()
-    if connection is None:
-        return []
-    
-    try:
-        cursor = connection.cursor(dictionary=True)
-        cursor.execute(query, params)
-        results = cursor.fetchall()
-        return results
-    except Error as e:
-        #print(f"Error executing query: {e}")
-        return []
-    finally:
-        if connection.is_connected():
-            cursor.close()
-            connection.close() """
+
 @app.route("/test-database", methods=["GET"])
 def test_database_connection():
     connection = get_db_connection()
     if connection is None:
         return jsonify({"message": "Database connection failed"}), 500
 
+    cursor = connection.cursor(pymysql.cursors.DictCursor)
+    
     try:
-        cursor = connection.cursor(dictionary=True)  # Automatically returns rows as dictionaries
-        cursor.execute("SELECT * FROM User LIMIT 5")
+        # Test query
+        query = "SELECT * FROM User LIMIT 5"
+        #query = "SHOW PROCEDURE STATUS WHERE db = 'events'"
+        # Execute the query
+        cursor.execute(query)
+        
+        # Fetch all results
         results = cursor.fetchall()
+        
 
         return jsonify({
             "message": "Database connection successful",
@@ -147,103 +136,69 @@ def test_database_connection():
         if connection.is_connected():
             cursor.close()
             connection.close()
-
-def call_procedure(procedure_name, params=()):
-    connection = get_db_connection()
-    if connection is None:
-        return []
-    
-    try:
-        cursor = connection.cursor(dictionary=True)
-        cursor.callproc(procedure_name, params)
         
-        # Get results from all result sets
-        results = []
-        for result in cursor.stored_results():
-            results.extend(result.fetchall())
-            
-        connection.commit()
-        return results
-    except Error as e:
-        print(f"Error calling procedure {procedure_name}: {e}")
-        return []
-    finally:
-        if connection.is_connected():
-            cursor.close()
-            connection.close()
-
-            
-            
-
+        
 @app.route("/events", defaults={"event_id": None}, methods=["GET", "POST"])
 @app.route("/events/<int:event_id>", methods=["GET", "PUT", "DELETE"])
-def events(event_id=None):
+
+def events(event_id = None):
     connection = get_db_connection()
     if connection is None:
         return jsonify({"message": "Database connection failed"}), 500
-
-    cursor = connection.cursor(dictionary=True)
-
-    try:
-        if request.method == 'GET':
-            if event_id is None:
-                # Get all upcoming events
-                cursor.callproc("getUpcomingEvents")
-                results = []
-                for result in cursor.stored_results():
-                    results.extend(result.fetchall())
-                return jsonify({"message": results}), 200
-            else:
-                # Get specific event details
-                cursor.callproc("GetEventDetails", [event_id])
-                results = []
-                for result in cursor.stored_results():
-                    results.extend(result.fetchall())
-                if not results:
-                    return jsonify({"message": f"No event found with id {event_id}"}), 404
-                return jsonify({"message": results}), 200
-
-        elif request.method == 'POST':
-            data = request.get_json()
-            if not data:
-                return jsonify({"message": "Invalid JSON or missing Content-Type"}), 400
-
+    cursor = connection.cursor(pymysql.cursors.DictCursor)
+        
+    if request.method == 'GET':
+        # Return upcoming events
+        if event_id is None:
             try:
-                title = data["title"]
-                description = data["description"]
-                eventDate = data["eventDate"]
-                location = data["location"]
-            except KeyError as e:
-                return jsonify({"message": f"Missing key: {str(e)}"}), 400
+                cursor.callproc("GetUpcomingEvents")
+                rows = cursor.fetchall()
+                return jsonify({"message": rows}), 200
+            except Exception as e:
+                return jsonify({"message": f"error calling all events: {str(e)}"}), 401
+            finally:
+                cursor.close()
+                connection.close()
+                
+        # Return event with given event id
+        try:
+            cursor.callproc("GetEventDetails", (event_id,) )
+            row = cursor.fetchall()
+            return jsonify({"message": row}), 200
+        except Exception as e:
+            return jsonify({"message": f"error fetching event: {str(e)}"}), 401
+        finally:
+            cursor.close()
+            connection.close() 
 
-            cursor.callproc("createEvent", (title, description, eventDate, location))
-            return jsonify({"message": "Created event"}), 201
-
-        elif request.method == 'PUT':
-            if event_id is None:
-                return jsonify({"message": "Missing event_id for update"}), 400
-
-            data = request.get_json()
-            if not data:
-                return jsonify({"message": "Invalid JSON or missing Content-Type"}), 400
-
-            try:
-                title = data["title"]
-                description = data["description"]
-                eventDate = data["eventDate"]
-                location = data["location"]
-            except KeyError as e:
-                return jsonify({"message": f"Missing key: {str(e)}"}), 400
-
-            cursor.callproc("updateEvent", (event_id, title, description, eventDate, location))
-            return jsonify({"message": "Updated event"}), 200
-
-        elif request.method == 'DELETE':
-            if event_id is None:
-                return jsonify({"message": "Missing event_id for delete"}), 400
-
-            cursor.callproc("deleteEvent", (event_id,))
-            return jsonify({"message": "Deleted event"}), 200
+    elif request.method == 'POST':
+        # Create a new event
+        data = request.get_json()
+        if not data:
+            cursor.close()
+            connection.close()
+            return jsonify({"message": "Invalid JSON or missing Content-Type"}), 400
+        try: 
+            title = data["title"]
+            description = data["description"]
+            eventDate = data["eventDate"]
+            location = data["location"]
+        except Exception as e:
+            cursor.close()
+            connection.close()
+            return jsonify({"message": f"Missing data: {str(e)}"}), 400
+        
+        try:
+            # Example input: 'Mon, 15 Jul 2025 00:00:00 GMT'
+            parsed_event_date = datetime.strptime(eventDate, "%a, %d %b %Y %H:%M:%S GMT")
+            formatted_event_date = parsed_event_date.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception as e:
+            cursor.close()
+            connection.close()
+            return jsonify({"message": f"Invalid date format: {str(e)}"}), 400
+        
+        cursor.callproc("CreateEvent",(title, description, formatted_event_date, location,))
+        connection.commit()
 
     except Exception as e:
         print(f"Error: {e}")
@@ -252,6 +207,59 @@ def events(event_id=None):
     finally:
         cursor.close()
         connection.close()
+
+        return jsonify({"message": "Created event"}), 201
+        
+    # Update existing event    
+    elif request.method == 'PUT':
+        data = request.get_json()
+        if not data:
+            cursor.close()
+            connection.close()
+            return jsonify({"message": "Invalid JSON or missing Content-Type"}), 400
+        
+        try:
+            title = data["title"]
+            description = data["description"]
+            eventDate = data["eventDate"]
+            location = data["location"]
+        except Exception as e:
+            cursor.close()
+            connection.close()
+            return jsonify({"message": f"Missing data: {str(e)}"}), 400
+        
+        try:
+            # Example input: 'Mon, 15 Jul 2025 00:00:00 GMT'
+            parsed_event_date = datetime.strptime(eventDate, "%a, %d %b %Y %H:%M:%S GMT")
+            formatted_event_date = parsed_event_date.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception as e:
+            cursor.close()
+            connection.close()
+            return jsonify({"message": f"Invalid date format: {str(e)}"}), 400
+        
+        try:
+            cursor.callproc("UpdateEvent",(event_id, title, description, formatted_event_date, location,))
+            connection.commit()
+            return jsonify({"message": "Updated event"}), 200
+        except Exception as e:
+            return jsonify({"message": f"error updating event: {str(e)}"}), 401 
+        finally:
+            cursor.close()
+            connection.close()
+            
+    # Delete existing event
+    elif request.method == 'DELETE':
+        try:
+            cursor.callproc("DeleteEvent",(event_id,))
+            connection.commit()      
+            return jsonify({"message": f"deleted event {event_id}"}), 200
+        except Exception as e:
+            return jsonify({"message": f"event cannot be deleted, Error: {e}"}), 401
+        finally:
+            cursor.close()
+            connection.close()
+    
+""" 
 
 @app.route("/events/<int:event_id>/register", methods=["POST"])
 def register_user(event_id):
@@ -263,18 +271,18 @@ def register_user(event_id):
     connection = get_db_connection()  # Establish a database connection
     if connection is None:
         return jsonify({"message": "Database connection failed"}), 500
-    cursor = connection.cursor(dictionary=True)
+    cursor = connection.cursor(pymysql.cursors.DictCursor)
     
     try:
-        cursor.callproc("newManager", (event_id, data["id"],))
+        cursor.callproc("AssignManager", (data["id"], event_id,))
         cursor.close()
         connection.close()
         return jsonify({"message": "added manager"}), 200
-    except:
-        cursor.close()
-        connection.close()
-        return jsonify({"message": "could not add manager"}), 400  
-    
+    except Exception as e:
+            cursor.close()
+            connection.close()
+            return jsonify({"message": f"could not add manager: {str(e)}"}), 401  
+
 @app.route("/events/<int:event_id>/registrations", defaults={"registration_id": None}, methods =["GET"])
 @app.route("/events/<int:event_id>/registrations/<int:registration_id>", methods =["PUT", "DELETE"])
 def registrations(event_id, registration_id = None):
@@ -287,17 +295,18 @@ def registrations(event_id, registration_id = None):
         connection = get_db_connection()  # Establish a database connection
         if connection is None:
             return jsonify({"message": "Database connection failed"}), 500
-        cursor = connection.cursor(dictionary=True)
+        cursor = connection.cursor(pymysql.cursors.DictCursor)
         
         try:
-            rows = cursor.callproc("allEventsByAdmin", (data["id"]))
+            cursor.callproc("GetManagedEvents", (data["id"],))
+            rows = cursor.fetchall()
             cursor.close()
             connection.close()
             return jsonify({"message": rows})
-        except:
+        except Exception as e:
             cursor.close()
             connection.close()
-            return jsonify({"message": "unable to get info"}), 400
+            return jsonify({"message": f"unable to get info: {str(e)}"}), 401  
             
         
     if request.method == "PUT":
@@ -307,10 +316,10 @@ def registrations(event_id, registration_id = None):
         connection = get_db_connection()  # Establish a database connection
         if connection is None:
             return jsonify({"message": "Database connection failed"}), 500
-        cursor = connection.cursor(dictionary=True)
+        cursor = connection.cursor(pymysql.cursors.DictCursor)
         
         try:
-            cursor.callproc("updateRegistration", registration_id, data["id"] , event_id,)
+            cursor.callproc("updateRegistration", (registration_id, data["id"] , event_id,))
             cursor.close()
             connection.close()
             return jsonify({"message": "updated registration"}), 200
@@ -326,7 +335,7 @@ def registrations(event_id, registration_id = None):
         connection = get_db_connection()  # Establish a database connection
         if connection is None:
             return jsonify({"message": "Database connection failed"}), 500
-        cursor = connection.cursor(dictionary=True)
+        cursor = connection.cursor(pymysql.cursors.DictCursor)
         
         try:
             cursor.callproc("deleteManagerFromEvent", data["id"], event_id,)
@@ -338,46 +347,56 @@ def registrations(event_id, registration_id = None):
             connection.close()
             return jsonify({"message": "unable to delete manager"}), 400
             
-        #print(f"deleted user from event {event_id} register id: {registration_id}")
-    
-@app.route("/users", defaults={"id": None}, methods= ["GET", "POST"])
-@app.route("/users/<int:id>", methods= ["GET", "PUT", "DELETE"])
+        #print(f"deleted user from event {event_id} register id: {registration_id}") """
+
+@app.route("/users", defaults={"id": None}, methods= ["GET"])
+@app.route("/users/<int:id>", methods= ["GET", "PUT"])
 def users(id = None):
+    connection = get_db_connection()  # Establish a database connection
+    if connection is None:
+        return jsonify({"message": "Database connection failed"}), 500
+    cursor = connection.cursor(pymysql.cursors.DictCursor)
+    
     if request.method == "GET":
-        if id is None:
-            connection = get_db_connection()  # Establish a database connection
-            if connection is None:
-                return jsonify({"message": "Database connection failed"}), 500
-            cursor = connection.cursor(dictionary=True)
-            
+        # Returns all users
+        if id is None:    
             try:
-                rows = cursor.callproc("getAllUsers",)
-                cursor.close()
-                connection.close()
+                cursor.callproc("GetAllUsers",)
+                rows = cursor.fetchall()
                 return jsonify({"message": rows}), 200
-            except:
+            except Exception as e:
+                return jsonify({"message": f"unable to get all users, Error: {e}"}), 400
+            finally:
                 cursor.close()
                 connection.close()
-                return jsonify({"message": "unable to get all users"}), 400
         
-        
-        #if userid is given
-        connection = get_db_connection()  # Establish a database connection
-        if connection is None:
-            return jsonify({"message": "Database connection failed"}), 500
-        cursor = connection.cursor(dictionary=True)
-        
+        # Returns specific user
         try:
-            row = cursor.callproc("getUserByID", id,)
-            cursor.close()
-            connection.close()
+            cursor.callproc("GetUserByID", (id,))
+            row = cursor.fetchall()
             return jsonify({"message": row}), 200
         except:
+            return jsonify({"message": f"unable to get data on id: {id}"}), 400
+        finally:
             cursor.close()
             connection.close()
-            return jsonify({"message": f"unable to get data on id {id}"}), 400
+            
+    # Edits existing user
+    if request.method == "PUT":
+        data = request.get_json()
+        if not data:
+            return jsonify({"message": "Invalid JSON or missing Content-Type"}), 400
+        try:
+            cursor.callproc("UpdateUser", (id, data["first_name"], data["last_name"], data["email"],))
+            connection.commit() 
+            return jsonify({"message": "user info updated"}), 200
+        except Exception as e:
+            return jsonify({"message": f"unable to update user info: {str(e)}"}), 401 
+        finally:
+            cursor.close()
+            connection.close()
     
-    if request.method == "POST":
+"""     if request.method == "POST":
         data = request.get_json()
         if not data:
             return jsonify({"message": "Invalid JSON or missing Content-Type"}), 400
@@ -385,40 +404,20 @@ def users(id = None):
         connection = get_db_connection()  # Establish a database connection
         if connection is None:
             return jsonify({"message": "Database connection failed"}), 500
-        cursor = connection.cursor(dictionary=True)
+        cursor = connection.cursor(pymysql.cursors.DictCursor)
         
         try:
-            cursor.callproc("assignMultipleManagers", id, data["ids"],)
+            cursor.callproc("AssignMultipleManagers", id, data["ids"],)
+            connection.commit()
             cursor.close()
             connection.close()
             return jsonify({"message": "added new manager(s)"}), 200
         except:
             cursor.close()
             connection.close()
-            return jsonify({"message": "unable to add manager(s)"}), 400
-    
-    if request.method == "PUT":
-        data = request.get_json()
-        if not data:
-            return jsonify({"message": "Invalid JSON or missing Content-Type"}), 400
-        
-        connection = get_db_connection()  # Establish a database connection
-        if connection is None:
-            return jsonify({"message": "Database connection failed"}), 500
-        cursor = connection.cursor(dictionary=True)
-        
-        try:
-            cursor.callproc("updateUserInfo", id, data["first_name"], data["last_name"], data["email"])
-            cursor.close()
-            connection.close()
-            return jsonify({"message": "user info updated"}), 200
-        except:
-            cursor.close()
-            connection.close()
-            return jsonify({"message": "unable to update user info"}), 400
-    
+            return jsonify({"message": "unable to add manager(s)"}), 400 """
 
-    if request.method == "DELETE":
+"""     if request.method == "DELETE":
         data = request.get_json()
         if not data:
             return jsonify({"message": "Invalid JSON or missing Content-Type"}), 400
@@ -426,18 +425,17 @@ def users(id = None):
         connection = get_db_connection()  # Establish a database connection
         if connection is None:
             return jsonify({"message": "Database connection failed"}), 500
-        cursor = connection.cursor(dictionary=True)
+        cursor = connection.cursor(pymysql.cursors.DictCursor)
         
         try:
-            cursor.callproc("removeMultipleManagers", id, data["ids"], )
+            cursor.callproc("RemoveMultipleManagers", id, data["ids"], )
             cursor.close()
             connection.close()
             return jsonify({"message": "deleted managers"}), 200
         except:
             cursor.close()
             connection.close()
-            return jsonify({"message": "unable to delete managers"}), 400
-    
+            return jsonify({"message": "unable to delete managers"}), 400"""
 
 @app.route("/")
 def home():
@@ -585,12 +583,14 @@ def handle_event_image(event_id):
     if connection is None:
         return jsonify({"message": "Database connection failed"}), 500
 
-    cursor = connection.cursor(dictionary=True)
-
+    cursor = connection.cursor(pymysql.cursors.DictCursor)
+    
     try:
-        # 1. Check if event exists
-        cursor.execute("SELECT event_id FROM Event WHERE event_id = %s", (event_id,))
+        # Verify the event exists
+        query = "SELECT event_id FROM Event WHERE event_id = %s"
+        cursor.execute(query, (event_id,))
         event = cursor.fetchone()
+        
 
         if not event:
             cursor.close()
@@ -624,24 +624,29 @@ def handle_event_image(event_id):
                 connection.close()
                 return jsonify({"message": "Failed to upload image"}), 500
 
-            # Check if image already exists
-            cursor.execute("SELECT detail_id, image_url FROM Event_Detail WHERE event_id = %s", (event_id,))
+            
+            # Check if there's already an image for this event
+            query = "SELECT detail_id, image_url FROM Event_Detail WHERE event_id = %s"
+            cursor.execute(query, (event_id,))
             existing_detail = cursor.fetchone()
-
+            
             if existing_detail:
+                # Update existing record
                 old_image_url = existing_detail["image_url"]
+                
+                # Delete old image if it exists
                 if old_image_url:
                     delete_file_from_gcs(old_image_url)
-
-                cursor.execute(
-                    "UPDATE Event_Detail SET image_url = %s, updated_at = CURRENT_TIMESTAMP WHERE detail_id = %s",
-                    (file_url, existing_detail["detail_id"])
-                )
+                
+                # Update record
+                update_query = "UPDATE Event_Detail SET image_url = %s, updated_at = CURRENT_TIMESTAMP WHERE detail_id = %s"
+                
+                cursor.execute(update_query, (file_url, existing_detail["detail_id"],))
             else:
-                cursor.execute(
-                    "INSERT INTO Event_Detail (event_id, image_url) VALUES (%s, %s)",
-                    (event_id, file_url)
-                )
+                # Create new record
+                insert_query = "INSERT INTO Event_Detail (event_id, image_url) VALUES (%s, %s)"
+                cursor.execute(insert_query, (event_id, file_url,))
+            
 
             connection.commit()
             cursor.close()
@@ -650,11 +655,14 @@ def handle_event_image(event_id):
 
         # 3. Handle GET - Retrieve image
         elif request.method == "GET":
-            cursor.execute("SELECT image_url FROM Event_Detail WHERE event_id = %s", (event_id,))
-            detail = cursor.fetchone()
 
+            query = "SELECT image_url FROM Event_Detail WHERE event_id = %s"
+            cursor.execute(query, (event_id,))
+            detail = cursor.fetchone()
+            
             cursor.close()
             connection.close()
+            
 
             if not detail or not detail["image_url"]:
                 return jsonify({"message": "No image found for this event"}), 404
@@ -666,13 +674,19 @@ def handle_event_image(event_id):
 
         # 4. Handle DELETE - Remove image
         elif request.method == "DELETE":
-            cursor.execute("SELECT detail_id, image_url FROM Event_Detail WHERE event_id = %s", (event_id,))
+
+            query = "SELECT detail_id, image_url FROM Event_Detail WHERE event_id = %s"
+            cursor.execute(query, (event_id,))
             detail = cursor.fetchone()
+            
 
             if not detail or not detail["image_url"]:
                 cursor.close()
                 connection.close()
                 return jsonify({"message": "No image found for this event"}), 404
+
+            
+            # Delete from GCS
 
             deleted = delete_file_from_gcs(detail["image_url"])
             if not deleted:
@@ -680,10 +694,11 @@ def handle_event_image(event_id):
                 connection.close()
                 return jsonify({"message": "Failed to delete image from storage"}), 500
 
-            cursor.execute(
-                "UPDATE Event_Detail SET image_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE detail_id = %s",
-                (detail["detail_id"],)
-            )
+            
+            # Update database
+            update_query = "UPDATE Event_Detail SET image_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE detail_id = %s"
+            cursor.execute(update_query, (detail["detail_id"],))
+
             connection.commit()
 
             cursor.close()
@@ -706,11 +721,14 @@ def handle_event_document(event_id):
     if connection is None:
         return jsonify({"message": "Database connection failed"}), 500
     
-    cursor = connection.cursor(dictionary=True)
+    cursor = connection.cursor(pymysql.cursors.DictCursor)
     
     try:
         # Verify the event exists
-        cursor.execute("SELECT event_id FROM Event WHERE event_id = %s", (event_id,))
+
+        query = "SELECT event_id FROM Event WHERE event_id = %s"
+        cursor.execute(query, (event_id,))
+
         event = cursor.fetchone()
         
         if not event:
@@ -749,28 +767,32 @@ def handle_event_document(event_id):
                 return jsonify({"message": "Failed to upload document"}), 500
             
             # Check if there's already a document for this event
-            cursor.execute("SELECT detail_id, document_url FROM Event_Detail WHERE event_id = %s", (event_id,))
+
+            query = "SELECT detail_id, document_url FROM Event_Detail WHERE event_id = %s"
+            cursor.execute(query, (event_id,))
+
             existing_detail = cursor.fetchone()
             
             if existing_detail:
                 # Update existing record
-                old_document_url = existing_detail['document_url']
+
+                old_document_url = existing_detail["document_url"]
+
                 
                 # Delete old document if it exists
                 if old_document_url:
                     delete_file_from_gcs(old_document_url)
                 
                 # Update record
-                cursor.execute(
-                    "UPDATE Event_Detail SET document_url = %s, updated_at = CURRENT_TIMESTAMP WHERE detail_id = %s",
-                    (file_url, existing_detail['detail_id'])
-                )
+
+                update_query = "UPDATE Event_Detail SET document_url = %s, updated_at = CURRENT_TIMESTAMP WHERE detail_id = %s"
+                cursor.execute(update_query, (file_url, existing_detail["detail_id"],))
             else:
                 # Create new record
-                cursor.execute(
-                    "INSERT INTO Event_Detail (event_id, document_url) VALUES (%s, %s)",
-                    (event_id, file_url)
-                )
+                insert_query = "INSERT INTO Event_Detail (event_id, document_url) VALUES (%s, %s)"
+                
+                cursor.execute(insert_query, (event_id, file_url,))
+
             
             connection.commit()
             cursor.close()
@@ -782,42 +804,55 @@ def handle_event_document(event_id):
         
         # Handle document retrieval
         elif request.method == "GET":
-            cursor.execute("SELECT document_url FROM Event_Detail WHERE event_id = %s", (event_id,))
+
+            query = "SELECT document_url FROM Event_Detail WHERE event_id = %s"
+            cursor.execute(query, (event_id,))
+
             detail = cursor.fetchone()
             
             cursor.close()
             connection.close()
             
-            if not detail or not detail['document_url']:
+
+            if not detail or not detail["document_url"]:
+
                 return jsonify({"message": "No document found for this event"}), 404
             
             return jsonify({
                 "message": "Document retrieved successfully",
-                "document_url": detail['document_url']
+
+                "document_url": detail["document_url"]
+
             }), 200
         
         # Handle document deletion
         elif request.method == "DELETE":
-            cursor.execute("SELECT detail_id, document_url FROM Event_Detail WHERE event_id = %s", (event_id,))
+
+            query = "SELECT detail_id, document_url FROM Event_Detail WHERE event_id = %s"
+            cursor.execute(query, (event_id,))
             detail = cursor.fetchone()
             
-            if not detail or not detail['document_url']:
+            if not detail or not detail["document_url"]:
+
                 cursor.close()
                 connection.close()
                 return jsonify({"message": "No document found for this event"}), 404
             
             # Delete from GCS
-            deleted = delete_file_from_gcs(detail['document_url'])
+
+            deleted = delete_file_from_gcs(detail["document_url"])
+
             if not deleted:
                 cursor.close()
                 connection.close()
                 return jsonify({"message": "Failed to delete document from storage"}), 500
             
             # Update database
-            cursor.execute(
-                "UPDATE Event_Detail SET document_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE detail_id = %s",
-                (detail['detail_id'],)
-            )
+
+            update_query = "UPDATE Event_Detail SET document_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE detail_id = %s"
+            
+            cursor.execute(update_query, (detail["detail_id"],))
+
             connection.commit()
             
             cursor.close()
@@ -830,8 +865,6 @@ def handle_event_document(event_id):
         if connection:
             connection.close()
         return jsonify({"message": f"Error handling event document: {str(e)}"}), 500
-
-
+    
 if __name__ == '__main__':
-    app.run(port=5000, debug=True)
-
+    app.run(debug= True, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
