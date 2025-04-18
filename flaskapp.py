@@ -7,7 +7,7 @@ import json
 from threading import Timer
 import mysql.connector
 from mysql.connector import Error
-import datetime
+from datetime import datetime
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 
@@ -23,7 +23,7 @@ from flask_limiter.util import get_remote_address
 import mysql.connector
 from mysql.connector import Error
 from google.cloud.sql.connector import Connector
-#import sqlalchemy
+
 import pymysql
 from google.cloud import storage
 import uuid
@@ -81,81 +81,45 @@ google = oauth.register(
 # Initialize the Connector object
 connector = Connector()
 # function to return the database connection object
-def getconn():
-    conn = connector.connect(
-        instance_connection_string=os.getenv('INSTANCE_CONNECTION_STRING'),  
-        driver="pymysql",
-        user=os.getenv('DB_USER'),
-        password=os.getenv('DB_PASS'),
-        db=os.getenv('DB_NAME')
-    )
-    return conn
 
 # Database connection
 def get_db_connection():
     try:
-        """ # Create SQLAlchemy connection pool
-        pool = sqlalchemy.create_engine(
-            "mysql+pymysql://",
-            creator=getconn,
+        conn = connector.connect(
+            instance_connection_string=os.getenv('INSTANCE_CONNECTION_STRING'),  # e.g. "project:region:instance"
+            driver="pymysql",
+            user=os.getenv('DB_USER'),
+            password=os.getenv('DB_PASS'),
+            db=os.getenv('DB_NAME')
         )
+        return conn
         
-        # Get a connection from the pool and return it
-        connection = pool.connect()  """
-        
-        
-        return getconn()
-        #return connection
     except Exception as e:
         print(f"Error connecting to Cloud SQL: {e}")
         return None
     
-""" # Helper function for executing SQL queries
-def execute_query(query, params=()):
-    connection = get_db_connection()
-    if connection is None:
-        return []
-    
-    try:
-        cursor = connection.cursor(pymysql.cursors.DictCursor)
-        cursor.execute(query, params)
-        results = cursor.fetchall()
-        return results
-    except Error as e:
-        #print(f"Error executing query: {e}")
-        return []
-    finally:
-        if connection.is_connected():
-            cursor.close()
-            connection.close() """
-""" @app.route("/test-database", methods=["GET"])
+
+@app.route("/test-database", methods=["GET"])
 def test_database_connection():
     connection = get_db_connection()
     if connection is None:
         return jsonify({"message": "Database connection failed"}), 500
+    cursor = connection.cursor(pymysql.cursors.DictCursor)
     
     try:
-        # Use SQLAlchemy's text method to create a SQL statement
-        #query = sqlalchemy.text("SELECT * FROM User LIMIT 5")
-        #query = sqlalchemy.text("SELECT * FROM Event")
-        #query = sqlalchemy.text("CALL createEvent('test', 'test event', '2025-07-15 00:00:00', 'test location')")
-        query = sqlalchemy.text("SHOW CREATE PROCEDURE UpdateUser")
-
+        # Test query
+        query = "SELECT * FROM User LIMIT 5"
+        #query = "SHOW PROCEDURE STATUS WHERE db = 'events'"
         # Execute the query
-        result = connection.execute(query)
+        cursor.execute(query)
         
         # Fetch all results
-        results = result.fetchall()
-        
-        # Convert results to a list of dictionaries
-        # Use column names from the result
-        columns = result.keys()
-        user_list = [dict(zip(columns, row)) for row in results]
+        results = cursor.fetchall()
         
         return jsonify({
             "message": "Database connection successful",
-            "users": user_list,
-            "user_count": len(user_list)
+            "users": results,
+            "user_count": len(results)
         }), 200
     
     except Exception as e:
@@ -168,73 +132,42 @@ def test_database_connection():
         # Close the connection if it's still open
         if connection:
             connection.close()
-            """
-
-def call_procedure(procedure_name, params=()):
-    connection = get_db_connection()
-    if connection is None:
-        return []
-    
-    try:
-        cursor = connection.cursor(dictionary=True)
-        cursor.callproc(procedure_name, params)
         
-        # Get results from all result sets
-        results = []
-        for result in cursor.stored_results():
-            results.extend(result.fetchall())
-            
-        connection.commit()
-        return results
-    except Error as e:
-        print(f"Error calling procedure {procedure_name}: {e}")
-        return []
-    finally:
-        if connection.is_connected():
-            cursor.close()
-            connection.close()
-
-            
-            
-
+        
 @app.route("/events", defaults={"event_id": None}, methods=["GET", "POST"])
 @app.route("/events/<int:event_id>", methods=["GET", "PUT", "DELETE"])
 def events(event_id = None):
-    connection = get_db_connection()  # Establish a database connection
+    connection = get_db_connection()
     if connection is None:
         return jsonify({"message": "Database connection failed"}), 500
     cursor = connection.cursor(pymysql.cursors.DictCursor)
         
     if request.method == 'GET':
+        # Return upcoming events
         if event_id is None:
-            #print("return full db")
-            
             try:
                 cursor.callproc("GetUpcomingEvents")
                 rows = cursor.fetchall()
-                cursor.close()
-                connection.close()
                 return jsonify({"message": rows}), 200
             except Exception as e:
+                return jsonify({"message": f"error calling all events: {str(e)}"}), 401
+            finally:
                 cursor.close()
                 connection.close()
-                return jsonify({"message": f"error calling all events: {str(e)}"}), 401
                 
-        
-        #print(f"Fetching event with id: {event_id}")
+        # Return event with given event id
         try:
             cursor.callproc("GetEventDetails", (event_id,) )
             row = cursor.fetchall()
-            cursor.close()
-            connection.close()
             return jsonify({"message": row}), 200
         except Exception as e:
+            return jsonify({"message": f"error fetching event: {str(e)}"}), 401
+        finally:
             cursor.close()
-            connection.close()
-            return jsonify({"message": f"error fetching event: {str(e)}"}), 401 
+            connection.close() 
 
     elif request.method == 'POST':
-        #print("create event")
+        # Create a new event
         data = request.get_json()
         if not data:
             cursor.close()
@@ -245,30 +178,29 @@ def events(event_id = None):
             description = data["description"]
             eventDate = data["eventDate"]
             location = data["location"]
-        except:
+        except Exception as e:
             cursor.close()
             connection.close()
-            return jsonify({"message": "Missing data"}), 400
+            return jsonify({"message": f"Missing data: {str(e)}"}), 400
         
         try:
             # Example input: 'Mon, 15 Jul 2025 00:00:00 GMT'
             parsed_event_date = datetime.strptime(eventDate, "%a, %d %b %Y %H:%M:%S GMT")
             formatted_event_date = parsed_event_date.strftime("%Y-%m-%d %H:%M:%S")
-        except ValueError:
+        except Exception as e:
             cursor.close()
             connection.close()
-            return jsonify({"message": "Invalid date format"}), 400
+            return jsonify({"message": f"Invalid date format: {str(e)}"}), 400
         
-        cursor.callproc("createEvent",(title, description, formatted_event_date, location,))
+        cursor.callproc("CreateEvent",(title, description, formatted_event_date, location,))
         connection.commit()
 
         cursor.close()
         connection.close()
         return jsonify({"message": "Created event"}), 201
         
+    # Update existing event    
     elif request.method == 'PUT':
-        #print(f"editing event with id: {event_id}")
-    
         data = request.get_json()
         if not data:
             cursor.close()
@@ -280,43 +212,41 @@ def events(event_id = None):
             description = data["description"]
             eventDate = data["eventDate"]
             location = data["location"]
-        except:
+        except Exception as e:
             cursor.close()
             connection.close()
-            return jsonify({"message": "Missing data"}), 400
+            return jsonify({"message": f"Missing data: {str(e)}"}), 400
         
         try:
             # Example input: 'Mon, 15 Jul 2025 00:00:00 GMT'
             parsed_event_date = datetime.strptime(eventDate, "%a, %d %b %Y %H:%M:%S GMT")
             formatted_event_date = parsed_event_date.strftime("%Y-%m-%d %H:%M:%S")
-        except ValueError:
+        except Exception as e:
             cursor.close()
             connection.close()
-            return jsonify({"message": "Invalid date format"}), 400
+            return jsonify({"message": f"Invalid date format: {str(e)}"}), 400
         
         try:
             cursor.callproc("UpdateEvent",(event_id, title, description, formatted_event_date, location,))
             connection.commit()
-            cursor.close()
-            connection.close()
             return jsonify({"message": "Updated event"}), 200
         except Exception as e:
+            return jsonify({"message": f"error updating event: {str(e)}"}), 401 
+        finally:
             cursor.close()
             connection.close()
-            return jsonify({"message": f"error updating event: {str(e)}"}), 401 
-        
+            
+    # Delete existing event
     elif request.method == 'DELETE':
-        #print(f"deleting event with id: {event_id}")
         try:
             cursor.callproc("DeleteEvent",(event_id,))
-            connection.commit()
-            cursor.close()
-            connection.close()
+            connection.commit()      
             return jsonify({"message": f"deleted event {event_id}"}), 200
-        except:
+        except Exception as e:
+            return jsonify({"message": f"event cannot be deleted, Error: {e}"}), 401
+        finally:
             cursor.close()
             connection.close()
-            return jsonify({"message": "event cannot be deleted"}), 401
     
 """ 
 @app.route("/events/<int:event_id>/register", methods=["POST"])
@@ -410,62 +340,49 @@ def registrations(event_id, registration_id = None):
 @app.route("/users", defaults={"id": None}, methods= ["GET"])
 @app.route("/users/<int:id>", methods= ["GET", "PUT"])
 def users(id = None):
+    connection = get_db_connection()  # Establish a database connection
+    if connection is None:
+        return jsonify({"message": "Database connection failed"}), 500
+    cursor = connection.cursor(pymysql.cursors.DictCursor)
+    
     if request.method == "GET":
-        if id is None:
-            connection = get_db_connection()  # Establish a database connection
-            if connection is None:
-                return jsonify({"message": "Database connection failed"}), 500
-            cursor = connection.cursor(pymysql.cursors.DictCursor)
-            
+        # Returns all users
+        if id is None:    
             try:
                 cursor.callproc("GetAllUsers",)
                 rows = cursor.fetchall()
-                cursor.close()
-                connection.close()
                 return jsonify({"message": rows}), 200
-            except:
+            except Exception as e:
+                return jsonify({"message": f"unable to get all users, Error: {e}"}), 400
+            finally:
                 cursor.close()
                 connection.close()
-                return jsonify({"message": "unable to get all users"}), 400
         
-        
-        #if userid is given
-        connection = get_db_connection()  # Establish a database connection
-        if connection is None:
-            return jsonify({"message": "Database connection failed"}), 500
-        cursor = connection.cursor(pymysql.cursors.DictCursor)
-        
+        # Returns specific user
         try:
             cursor.callproc("GetUserByID", (id,))
             row = cursor.fetchall()
-            cursor.close()
-            connection.close()
             return jsonify({"message": row}), 200
         except:
+            return jsonify({"message": f"unable to get data on id: {id}"}), 400
+        finally:
             cursor.close()
             connection.close()
-            return jsonify({"message": f"unable to get data on id {id}"}), 400
-        
+            
+    # Edits existing user
     if request.method == "PUT":
         data = request.get_json()
         if not data:
             return jsonify({"message": "Invalid JSON or missing Content-Type"}), 400
-        
-        connection = get_db_connection()  # Establish a database connection
-        if connection is None:
-            return jsonify({"message": "Database connection failed"}), 500
-        cursor = connection.cursor(pymysql.cursors.DictCursor)
-        
         try:
             cursor.callproc("UpdateUser", (id, data["first_name"], data["last_name"], data["email"],))
             connection.commit() 
-            cursor.close()
-            connection.close()
             return jsonify({"message": "user info updated"}), 200
         except Exception as e:
+            return jsonify({"message": f"unable to update user info: {str(e)}"}), 401 
+        finally:
             cursor.close()
             connection.close()
-            return jsonify({"message": f"unable to update user info: {str(e)}"}), 401 
     
 """     if request.method == "POST":
         data = request.get_json()
@@ -507,28 +424,6 @@ def users(id = None):
             cursor.close()
             connection.close()
             return jsonify({"message": "unable to delete managers"}), 400"""
-    
-if __name__ == '__main__':
-    #app.run(port=5000, debug=True)
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
-    #app.run(host='0.0.0.0', port=8080)
-
-
-    # User class for session management
-class User:
-    def __init__(self, user_id, email, name):
-        self.id = user_id
-        self.email = email
-        self.name = name
-        self.is_authenticated = True
-        self.is_active = True
-        self.is_anonymous = False
-
-    def get_id(self):
-        return str(self.id)
-
-# Helper to load user from session or database
-def load_user(user_id):
 
 @app.route("/")
 def home():
@@ -558,7 +453,7 @@ def callback():
 
     print(user_email)
     allowed_domain = "gmail.com"  
-    if not (user_email == "sales.club@westernusc.ca" or "westernsalesclub@gmail.com"):
+    if not (user_email == "sales.club@westernusc.ca" or "westernsalesclub@gmail.com" or "justinohg121@gmail.com"):
         session.pop("user", None)
         return redirect(url_for("failed_login") + "?error=Only users from " + allowed_domain + " are allowed to sign in")
 
@@ -616,7 +511,10 @@ def upload_file_to_gcs(file, bucket_name="t4-backend", folder="event_images"):
         Public URL of the uploaded file or None if upload fails
     """
     try:
-        # Generate a secure filename with a UUID to prevent name collisions
+        # Reset file pointer to beginning
+        file.seek(0)
+        
+        # Generate a secure filename with a UUID
         original_filename = secure_filename(file.filename)
         filename_parts = original_filename.rsplit('.', 1)
         
@@ -626,7 +524,7 @@ def upload_file_to_gcs(file, bucket_name="t4-backend", folder="event_images"):
         else:
             unique_filename = f"{uuid.uuid4().hex}"
             
-        # Path in the bucket where the file will be stored
+        # Path in the bucket
         destination_blob_name = f"{folder}/{unique_filename}"
         
         # Get the storage client and bucket
@@ -637,11 +535,11 @@ def upload_file_to_gcs(file, bucket_name="t4-backend", folder="event_images"):
         # Upload the file
         blob.upload_from_file(file, content_type=file.content_type)
         
-        # Make the blob publicly accessible
-        blob.make_public()
+        # Instead of make_public() for uniform bucket-level access:
+        # Just construct the public URL based on the bucket and object name
+        public_url = f"https://storage.googleapis.com/{bucket_name}/{destination_blob_name}"
         
-        # Return the public URL
-        return blob.public_url
+        return public_url
     
     except Exception as e:
         print(f"Error uploading file to GCS: {e}")
@@ -685,13 +583,13 @@ def handle_event_image(event_id):
     if connection is None:
         return jsonify({"message": "Database connection failed"}), 500
     
-    cursor = connection.cursor(dictionary=True)
+    cursor = connection.cursor(pymysql.cursors.DictCursor)
     
     try:
         # Verify the event exists
-        query = sqlalchemy.text("SELECT event_id FROM Event WHERE event_id = :event_id")
-        result = connection.execute(query, {"event_id": event_id})
-        event = result.fetchone()
+        query = "SELECT event_id FROM Event WHERE event_id = %s"
+        cursor.execute(query, (event_id,))
+        event = cursor.fetchone()
         
         if not event:
             cursor.close()
@@ -729,35 +627,26 @@ def handle_event_image(event_id):
                 return jsonify({"message": "Failed to upload image"}), 500
             
             # Check if there's already an image for this event
-            query = sqlalchemy.text("SELECT detail_id, image_url FROM Event_Detail WHERE event_id = :event_id")
-            result = connection.execute(query, {"event_id": event_id})
-            existing_detail = result.fetchone()
+            query = "SELECT detail_id, image_url FROM Event_Detail WHERE event_id = %s"
+            cursor.execute(query, (event_id,))
+            existing_detail = cursor.fetchone()
             
             if existing_detail:
                 # Update existing record
-                old_image_url = existing_detail.image_url
+                old_image_url = existing_detail["image_url"]
                 
                 # Delete old image if it exists
                 if old_image_url:
                     delete_file_from_gcs(old_image_url)
                 
                 # Update record
-                update_query = sqlalchemy.text(
-                    "UPDATE Event_Detail SET image_url = :image_url, updated_at = CURRENT_TIMESTAMP WHERE detail_id = :detail_id"
-                )
-                connection.execute(update_query, {
-                    "image_url": file_url,
-                    "detail_id": existing_detail.detail_id
-                })
+                update_query = "UPDATE Event_Detail SET image_url = %s, updated_at = CURRENT_TIMESTAMP WHERE detail_id = %s"
+                
+                cursor.execute(update_query, (file_url, existing_detail["detail_id"],))
             else:
                 # Create new record
-                insert_query = sqlalchemy.text(
-                    "INSERT INTO Event_Detail (event_id, image_url) VALUES (:event_id, :image_url)"
-                )
-                connection.execute(insert_query, {
-                    "event_id": event_id,
-                    "image_url": file_url
-                })
+                insert_query = "INSERT INTO Event_Detail (event_id, image_url) VALUES (%s, %s)"
+                cursor.execute(insert_query, (event_id, file_url,))
             
             connection.commit()
             cursor.close()
@@ -769,44 +658,42 @@ def handle_event_image(event_id):
         
         # Handle image retrieval
         elif request.method == "GET":
-            query = sqlalchemy.text("SELECT image_url FROM Event_Detail WHERE event_id = :event_id")
-            result = connection.execute(query, {"event_id": event_id})
-            detail = result.fetchone()
+            query = "SELECT image_url FROM Event_Detail WHERE event_id = %s"
+            cursor.execute(query, (event_id,))
+            detail = cursor.fetchone()
             
             cursor.close()
             connection.close()
             
-            if not detail or not detail.image_url:
+            if not detail or not detail["image_url"]:
                 return jsonify({"message": "No image found for this event"}), 404
             
             return jsonify({
                 "message": "Image retrieved successfully",
-                "image_url": detail.image_url
+                "image_url": detail["image_url"]
             }), 200
         
         # Handle image deletion
         elif request.method == "DELETE":
-            query = sqlalchemy.text("SELECT detail_id, image_url FROM Event_Detail WHERE event_id = :event_id")
-            result = connection.execute(query, {"event_id": event_id})
-            detail = result.fetchone()
+            query = "SELECT detail_id, image_url FROM Event_Detail WHERE event_id = %s"
+            cursor.execute(query, (event_id,))
+            detail = cursor.fetchone()
             
-            if not detail or not detail.image_url:
+            if not detail or not detail["image_url"]:
                 cursor.close()
                 connection.close()
                 return jsonify({"message": "No image found for this event"}), 404
             
             # Delete from GCS
-            deleted = delete_file_from_gcs(detail.image_url)
+            deleted = delete_file_from_gcs(detail["image_url"])
             if not deleted:
                 cursor.close()
                 connection.close()
                 return jsonify({"message": "Failed to delete image from storage"}), 500
             
             # Update database
-            update_query = sqlalchemy.text(
-                "UPDATE Event_Detail SET image_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE detail_id = :detail_id"
-            )
-            connection.execute(update_query, {"detail_id": detail.detail_id})
+            update_query = "UPDATE Event_Detail SET image_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE detail_id = %s"
+            cursor.execute(update_query, (detail["detail_id"],))
             connection.commit()
             
             cursor.close()
@@ -829,13 +716,13 @@ def handle_event_document(event_id):
     if connection is None:
         return jsonify({"message": "Database connection failed"}), 500
     
-    cursor = connection.cursor(dictionary=True)
+    cursor = connection.cursor(pymysql.cursors.DictCursor)
     
     try:
         # Verify the event exists
-        query = sqlalchemy.text("SELECT event_id FROM Event WHERE event_id = :event_id")
-        result = connection.execute(query, {"event_id": event_id})
-        event = result.fetchone()
+        query = "SELECT event_id FROM Event WHERE event_id = %s"
+        cursor.execute(query, (event_id,))
+        event = cursor.fetchone()
         
         if not event:
             cursor.close()
@@ -873,35 +760,26 @@ def handle_event_document(event_id):
                 return jsonify({"message": "Failed to upload document"}), 500
             
             # Check if there's already a document for this event
-            query = sqlalchemy.text("SELECT detail_id, document_url FROM Event_Detail WHERE event_id = :event_id")
-            result = connection.execute(query, {"event_id": event_id})
-            existing_detail = result.fetchone()
+            query = "SELECT detail_id, document_url FROM Event_Detail WHERE event_id = %s"
+            cursor.execute(query, (event_id,))
+            existing_detail = cursor.fetchone()
             
             if existing_detail:
                 # Update existing record
-                old_document_url = existing_detail.document_url
+                old_document_url = existing_detail["document_url"]
                 
                 # Delete old document if it exists
                 if old_document_url:
                     delete_file_from_gcs(old_document_url)
                 
                 # Update record
-                update_query = sqlalchemy.text(
-                    "UPDATE Event_Detail SET document_url = :document_url, updated_at = CURRENT_TIMESTAMP WHERE detail_id = :detail_id"
-                )
-                connection.execute(update_query, {
-                    "document_url": file_url,
-                    "detail_id": existing_detail.detail_id
-                })
+                update_query = "UPDATE Event_Detail SET document_url = %s, updated_at = CURRENT_TIMESTAMP WHERE detail_id = %s"
+                cursor.execute(update_query, (file_url, existing_detail["detail_id"],))
             else:
                 # Create new record
-                insert_query = sqlalchemy.text(
-                    "INSERT INTO Event_Detail (event_id, document_url) VALUES (:event_id, :document_url)"
-                )
-                connection.execute(insert_query, {
-                    "event_id": event_id,
-                    "document_url": file_url
-                })
+                insert_query = "INSERT INTO Event_Detail (event_id, document_url) VALUES (%s, %s)"
+                
+                cursor.execute(insert_query, (event_id, file_url,))
             
             connection.commit()
             cursor.close()
@@ -913,44 +791,43 @@ def handle_event_document(event_id):
         
         # Handle document retrieval
         elif request.method == "GET":
-            query = sqlalchemy.text("SELECT document_url FROM Event_Detail WHERE event_id = :event_id")
-            result = connection.execute(query, {"event_id": event_id})
-            detail = result.fetchone()
+            query = "SELECT document_url FROM Event_Detail WHERE event_id = %s"
+            cursor.execute(query, (event_id,))
+            detail = cursor.fetchone()
             
             cursor.close()
             connection.close()
             
-            if not detail or not detail.document_url:
+            if not detail or not detail["document_url"]:
                 return jsonify({"message": "No document found for this event"}), 404
             
             return jsonify({
                 "message": "Document retrieved successfully",
-                "document_url": detail.document_url
+                "document_url": detail["document_url"]
             }), 200
         
         # Handle document deletion
         elif request.method == "DELETE":
-            query = sqlalchemy.text("SELECT detail_id, document_url FROM Event_Detail WHERE event_id = :event_id")
-            result = connection.execute(query, {"event_id": event_id})
-            detail = result.fetchone()
+            query = "SELECT detail_id, document_url FROM Event_Detail WHERE event_id = %s"
+            cursor.execute(query, (event_id,))
+            detail = cursor.fetchone()
             
-            if not detail or not detail.document_url:
+            if not detail or not detail["document_url"]:
                 cursor.close()
                 connection.close()
                 return jsonify({"message": "No document found for this event"}), 404
             
             # Delete from GCS
-            deleted = delete_file_from_gcs(detail.document_url)
+            deleted = delete_file_from_gcs(detail["document_url"])
             if not deleted:
                 cursor.close()
                 connection.close()
                 return jsonify({"message": "Failed to delete document from storage"}), 500
             
             # Update database
-            update_query = sqlalchemy.text(
-                "UPDATE Event_Detail SET document_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE detail_id = :detail_id"
-            )
-            connection.execute(update_query, {"detail_id": detail.detail_id})
+            update_query = "UPDATE Event_Detail SET document_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE detail_id = %s"
+            
+            cursor.execute(update_query, (detail["detail_id"],))
             connection.commit()
             
             cursor.close()
@@ -963,3 +840,6 @@ def handle_event_document(event_id):
         if connection:
             connection.close()
         return jsonify({"message": f"Error handling event document: {str(e)}"}), 500
+    
+if __name__ == '__main__':
+    app.run(debug= True, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))

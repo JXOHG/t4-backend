@@ -10,4 +10,4 @@ mysql-connector-python
 pymysql
 google-auth
 cloud-sql-python-connector[pymysql]
-sqlalchemy
+google-cloud-storage
