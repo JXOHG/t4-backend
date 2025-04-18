@@ -82,9 +82,10 @@ google = oauth.register(
 connector = Connector()
 # function to return the database connection object
 
-# Database connection
+# Database connection using MySQL Connector
 def get_db_connection():
     try:
+
         conn = connector.connect(
             instance_connection_string=os.getenv('INSTANCE_CONNECTION_STRING'),  # e.g. "project:region:instance"
             driver="pymysql",
@@ -96,6 +97,7 @@ def get_db_connection():
         
     except Exception as e:
         print(f"Error connecting to Cloud SQL: {e}")
+
         return None
     
 
@@ -104,6 +106,7 @@ def test_database_connection():
     connection = get_db_connection()
     if connection is None:
         return jsonify({"message": "Database connection failed"}), 500
+
     cursor = connection.cursor(pymysql.cursors.DictCursor)
     
     try:
@@ -116,26 +119,28 @@ def test_database_connection():
         # Fetch all results
         results = cursor.fetchall()
         
+
         return jsonify({
             "message": "Database connection successful",
             "users": results,
             "user_count": len(results)
         }), 200
-    
+
     except Exception as e:
         return jsonify({
             "message": "Error querying database",
             "error": str(e)
         }), 500
-    
+
     finally:
-        # Close the connection if it's still open
-        if connection:
+        if connection.is_connected():
+            cursor.close()
             connection.close()
         
         
 @app.route("/events", defaults={"event_id": None}, methods=["GET", "POST"])
 @app.route("/events/<int:event_id>", methods=["GET", "PUT", "DELETE"])
+
 def events(event_id = None):
     connection = get_db_connection()
     if connection is None:
@@ -195,8 +200,14 @@ def events(event_id = None):
         cursor.callproc("CreateEvent",(title, description, formatted_event_date, location,))
         connection.commit()
 
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"message": "An error occurred"}), 500
+
+    finally:
         cursor.close()
         connection.close()
+
         return jsonify({"message": "Created event"}), 201
         
     # Update existing event    
@@ -249,6 +260,7 @@ def events(event_id = None):
             connection.close()
     
 """ 
+
 @app.route("/events/<int:event_id>/register", methods=["POST"])
 def register_user(event_id):
     #print(f"user is being added to event with ID: {event_id}")
@@ -499,17 +511,6 @@ def get_storage_client():
 
 
 def upload_file_to_gcs(file, bucket_name="t4-backend", folder="event_images"):
-    """
-    Uploads a file to Google Cloud Storage bucket
-    
-    Args:
-        file: The file object to upload
-        bucket_name: Name of the GCS bucket
-        folder: Folder name within the bucket
-        
-    Returns:
-        Public URL of the uploaded file or None if upload fails
-    """
     try:
         # Reset file pointer to beginning
         file.seek(0)
@@ -578,11 +579,10 @@ def delete_file_from_gcs(file_url, bucket_name="t4-backend"):
 #endpoint for image handling
 @app.route("/events/<int:event_id>/image", methods=["POST", "GET", "DELETE"])
 def handle_event_image(event_id):
-    # Check if event exists
     connection = get_db_connection()
     if connection is None:
         return jsonify({"message": "Database connection failed"}), 500
-    
+
     cursor = connection.cursor(pymysql.cursors.DictCursor)
     
     try:
@@ -591,40 +591,39 @@ def handle_event_image(event_id):
         cursor.execute(query, (event_id,))
         event = cursor.fetchone()
         
+
         if not event:
             cursor.close()
             connection.close()
             return jsonify({"message": f"Event with ID {event_id} not found"}), 404
-        
-        # Handle image upload
+
+        # 2. Handle POST - Upload image
         if request.method == "POST":
-            # Check if file is in the request
             if 'image' not in request.files:
                 cursor.close()
                 connection.close()
                 return jsonify({"message": "No image file provided"}), 400
-            
+
             file = request.files['image']
-            
-            # Check if file has a name
+
             if file.filename == '':
                 cursor.close()
                 connection.close()
                 return jsonify({"message": "No selected file"}), 400
-            
-            # Check file extension
+
             allowed_extensions = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
             if '.' not in file.filename or file.filename.rsplit('.', 1)[1].lower() not in allowed_extensions:
                 cursor.close()
                 connection.close()
                 return jsonify({"message": "Invalid file type. Allowed types: png, jpg, jpeg, gif, webp"}), 400
-            
+
             # Upload to GCS
             file_url = upload_file_to_gcs(file)
             if not file_url:
                 cursor.close()
                 connection.close()
                 return jsonify({"message": "Failed to upload image"}), 500
+
             
             # Check if there's already an image for this event
             query = "SELECT detail_id, image_url FROM Event_Detail WHERE event_id = %s"
@@ -648,16 +647,15 @@ def handle_event_image(event_id):
                 insert_query = "INSERT INTO Event_Detail (event_id, image_url) VALUES (%s, %s)"
                 cursor.execute(insert_query, (event_id, file_url,))
             
+
             connection.commit()
             cursor.close()
             connection.close()
-            return jsonify({
-                "message": "Image uploaded successfully",
-                "image_url": file_url
-            }), 201
-        
-        # Handle image retrieval
+            return jsonify({"message": "Image uploaded successfully", "image_url": file_url}), 201
+
+        # 3. Handle GET - Retrieve image
         elif request.method == "GET":
+
             query = "SELECT image_url FROM Event_Detail WHERE event_id = %s"
             cursor.execute(query, (event_id,))
             detail = cursor.fetchone()
@@ -665,41 +663,48 @@ def handle_event_image(event_id):
             cursor.close()
             connection.close()
             
+
             if not detail or not detail["image_url"]:
                 return jsonify({"message": "No image found for this event"}), 404
-            
+
             return jsonify({
                 "message": "Image retrieved successfully",
                 "image_url": detail["image_url"]
             }), 200
-        
-        # Handle image deletion
+
+        # 4. Handle DELETE - Remove image
         elif request.method == "DELETE":
+
             query = "SELECT detail_id, image_url FROM Event_Detail WHERE event_id = %s"
             cursor.execute(query, (event_id,))
             detail = cursor.fetchone()
             
+
             if not detail or not detail["image_url"]:
                 cursor.close()
                 connection.close()
                 return jsonify({"message": "No image found for this event"}), 404
+
             
             # Delete from GCS
+
             deleted = delete_file_from_gcs(detail["image_url"])
             if not deleted:
                 cursor.close()
                 connection.close()
                 return jsonify({"message": "Failed to delete image from storage"}), 500
+
             
             # Update database
             update_query = "UPDATE Event_Detail SET image_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE detail_id = %s"
             cursor.execute(update_query, (detail["detail_id"],))
+
             connection.commit()
-            
+
             cursor.close()
             connection.close()
             return jsonify({"message": "Image deleted successfully"}), 200
-    
+
     except Exception as e:
         if cursor:
             cursor.close()
@@ -720,8 +725,10 @@ def handle_event_document(event_id):
     
     try:
         # Verify the event exists
+
         query = "SELECT event_id FROM Event WHERE event_id = %s"
         cursor.execute(query, (event_id,))
+
         event = cursor.fetchone()
         
         if not event:
@@ -760,19 +767,24 @@ def handle_event_document(event_id):
                 return jsonify({"message": "Failed to upload document"}), 500
             
             # Check if there's already a document for this event
+
             query = "SELECT detail_id, document_url FROM Event_Detail WHERE event_id = %s"
             cursor.execute(query, (event_id,))
+
             existing_detail = cursor.fetchone()
             
             if existing_detail:
                 # Update existing record
+
                 old_document_url = existing_detail["document_url"]
+
                 
                 # Delete old document if it exists
                 if old_document_url:
                     delete_file_from_gcs(old_document_url)
                 
                 # Update record
+
                 update_query = "UPDATE Event_Detail SET document_url = %s, updated_at = CURRENT_TIMESTAMP WHERE detail_id = %s"
                 cursor.execute(update_query, (file_url, existing_detail["detail_id"],))
             else:
@@ -780,6 +792,7 @@ def handle_event_document(event_id):
                 insert_query = "INSERT INTO Event_Detail (event_id, document_url) VALUES (%s, %s)"
                 
                 cursor.execute(insert_query, (event_id, file_url,))
+
             
             connection.commit()
             cursor.close()
@@ -791,43 +804,55 @@ def handle_event_document(event_id):
         
         # Handle document retrieval
         elif request.method == "GET":
+
             query = "SELECT document_url FROM Event_Detail WHERE event_id = %s"
             cursor.execute(query, (event_id,))
+
             detail = cursor.fetchone()
             
             cursor.close()
             connection.close()
             
+
             if not detail or not detail["document_url"]:
+
                 return jsonify({"message": "No document found for this event"}), 404
             
             return jsonify({
                 "message": "Document retrieved successfully",
+
                 "document_url": detail["document_url"]
+
             }), 200
         
         # Handle document deletion
         elif request.method == "DELETE":
+
             query = "SELECT detail_id, document_url FROM Event_Detail WHERE event_id = %s"
             cursor.execute(query, (event_id,))
             detail = cursor.fetchone()
             
             if not detail or not detail["document_url"]:
+
                 cursor.close()
                 connection.close()
                 return jsonify({"message": "No document found for this event"}), 404
             
             # Delete from GCS
+
             deleted = delete_file_from_gcs(detail["document_url"])
+
             if not deleted:
                 cursor.close()
                 connection.close()
                 return jsonify({"message": "Failed to delete document from storage"}), 500
             
             # Update database
+
             update_query = "UPDATE Event_Detail SET document_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE detail_id = %s"
             
             cursor.execute(update_query, (detail["detail_id"],))
+
             connection.commit()
             
             cursor.close()
