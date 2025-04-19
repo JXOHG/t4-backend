@@ -66,7 +66,7 @@ google = oauth.register(
     server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
     client_kwargs={"scope": "openid email profile"},
     api_base_url="https://www.googleapis.com/oauth2/v1/",
-    redirect_uri="https://flask-app-250624862173.us-central1.run.app/callback"  # Update this to your deployed app's URL
+    redirect_uri="http://flask-app-250624862173.us-central1.run.app/callback"  
 
 )
 
@@ -457,7 +457,7 @@ def callback():
 
     try:
         session["user"] = user
-        return redirect(url_for("home"))
+        return redirect(request.host + "/events-dashboard")
     except Exception as e:
         session.pop("user", None)
         return redirect(url_for("failed_login") + "?error=Error checking user: " + str(e))
