@@ -457,7 +457,8 @@ def callback():
 
     try:
         session["user"] = user
-        return redirect(request.host + "/events-dashboard")
+        print(request)
+        return redirect(request.url_root + "/events-dashboard")
     except Exception as e:
         session.pop("user", None)
         return redirect(url_for("failed_login") + "?error=Error checking user: " + str(e))
