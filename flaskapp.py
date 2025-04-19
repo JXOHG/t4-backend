@@ -65,7 +65,7 @@ google = oauth.register(
     access_token_params=None,
     server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
     client_kwargs={"scope": "openid email profile"},
-    redirect_uri=os.getenv("REDIRECT_URI", "http://localhost:5000/callback") 
+    redirect_uri=os.getenv("REDIRECT_URI", "http://localhost:5173/events-dashboard") 
 )
 
 # Initialize the Connector object
