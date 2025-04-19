@@ -55,7 +55,7 @@ google = oauth.register(
     token_url='https://accounts.google.com/o/oauth2/token',
     userinfo_endpoint='https://www.googleapis.com/oauth2/v3/userinfo',
     client_kwargs={'scope': 'openid email profile'},
-    redirect_uri='http://localhost:5000/authorize/google'  # Adjust for production
+    redirect_uri="https://flask-app-250624862173.us-central1.run.app/callback"  # Update this to your deployed app's URL
 )
 
 
@@ -144,13 +144,44 @@ def test_database_connection():
         # Close the connection if it's still open
         if connection:
             connection.close()
-                   
-@app.route("/test")
-def test():
-    return jsonify({"message":"helllo"})     
+
+def call_procedure(procedure_name, params=()):
+    connection = get_db_connection()
+    if connection is None:
+        return []
+    
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.callproc(procedure_name, params)
+        
+        # Get results from all result sets
+        results = []
+        for result in cursor.stored_results():
+            results.extend(result.fetchall())
+            
+        connection.commit()
+        return results
+    except Error as e:
+        print(f"Error calling procedure {procedure_name}: {e}")
+        return []
+    finally:
+        if connection.is_connected():
+            cursor.close()
+            connection.close()
+
+# Decorator to protect routes
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if request.method in ["PUT", "POST"] and "user" not in session:
+            return jsonify({"message": "Unauthorized. Please log in."}), 401
+        return f(*args, **kwargs)
+    return decorated_function
+
 
 @app.route("/events", defaults={"event_id": None}, methods=["GET", "POST"])
 @app.route("/events/<int:event_id>", methods=["GET", "PUT", "DELETE"])
+@login_required
 def events(event_id = None):
     connection = get_db_connection()  # Establish a database connection
     if connection is None:
@@ -250,6 +281,7 @@ def events(event_id = None):
     
 
 @app.route("/events/<int:event_id>/register", methods=["POST"])
+@login_required
 def register_user(event_id):
     #print(f"user is being added to event with ID: {event_id}")
     data = request.get_json()
@@ -273,6 +305,7 @@ def register_user(event_id):
     
 @app.route("/events/<int:event_id>/registrations", defaults={"registration_id": None}, methods =["GET"])
 @app.route("/events/<int:event_id>/registrations/<int:registration_id>", methods =["PUT", "DELETE"])
+@login_required
 def registrations(event_id, registration_id = None):
     data = request.get_json()
     if not data:
@@ -338,6 +371,7 @@ def registrations(event_id, registration_id = None):
     
 @app.route("/users", defaults={"id": None}, methods= ["GET", "POST"])
 @app.route("/users/<int:id>", methods= ["GET", "PUT", "DELETE"])
+@login_required
 def users(id = None):
     if request.method == "GET":
         if id is None:
