@@ -65,9 +65,7 @@ google = oauth.register(
     access_token_params=None,
     server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
     client_kwargs={"scope": "openid email profile"},
-    api_base_url="https://www.googleapis.com/oauth2/v1/",
-    redirect_uri="http://flask-app-250624862173.us-central1.run.app/callback"  
-
+    redirect_uri=os.getenv("REDIRECT_URI", "http://localhost:5000/callback") 
 )
 
 # Initialize the Connector object
