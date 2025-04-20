@@ -135,7 +135,7 @@ def login_required(f):
 @app.route("/events/<int:event_id>", methods=["GET", "PUT", "DELETE"])
 @login_required
 def events(event_id = None):
-    connection = get_db_connection()  # Establish a database connection
+    connection = get_db_connection() 
     if connection is None:
         return jsonify({"message": "Database connection failed"}), 500
     cursor = connection.cursor(pymysql.cursors.DictCursor)
