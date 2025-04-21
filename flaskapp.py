@@ -54,6 +54,8 @@ Session(app)
 app.config["GOOGLE_CLIENT_ID"] = os.getenv("GOOGLE_CLIENT_ID")
 app.config["GOOGLE_CLIENT_SECRET"] = os.getenv("GOOGLE_CLIENT_SECRET")
 
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
+
 oauth = OAuth(app)
 google = oauth.register(
     name="google",
@@ -64,8 +66,8 @@ google = oauth.register(
     access_token_url="https://oauth2.googleapis.com/token",
     access_token_params=None,
     server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+    userinfo_endpoint='https://www.googleapis.com/oauth2/v3/userinfo',
     client_kwargs={"scope": "openid email profile"},
-    api_base_url="https://www.googleapis.com/oauth2/v1/",
 )
 
 # Initialize the Connector object
@@ -118,10 +120,22 @@ def test_database_connection():
             cursor.close()
             connection.close()
 
+
+            # Decorator to protect routes
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if request.method in ["PUT", "POST"] and "user" not in session:
+            return jsonify({"message": "Unauthorized. Please log in."}), 401
+        return f(*args, **kwargs)
+    return decorated_function
+
+
 @app.route("/events", defaults={"event_id": None}, methods=["GET", "POST"])
 @app.route("/events/<int:event_id>", methods=["GET", "PUT", "DELETE"])
-def events(event_id=None):
-    connection = get_db_connection()
+@login_required
+def events(event_id = None):
+    connection = get_db_connection() 
     if connection is None:
         return jsonify({"message": "Database connection failed"}), 500
     cursor = connection.cursor(pymysql.cursors.DictCursor)
@@ -236,6 +250,7 @@ def events(event_id=None):
 
 """
 @app.route("/events/<int:event_id>/register", methods=["POST"])
+@login_required
 def register_user(event_id):
     data = request.get_json()
     if not data:
@@ -258,6 +273,7 @@ def register_user(event_id):
 
 @app.route("/events/<int:event_id>/registrations", defaults={"registration_id": None}, methods=["GET"])
 @app.route("/events/<int:event_id>/registrations/<int:registration_id>", methods=["PUT", "DELETE"])
+@login_required
 def registrations(event_id, registration_id=None):
     data = request.get_json()
     if not data:
@@ -321,6 +337,7 @@ def registrations(event_id, registration_id=None):
 
 @app.route("/users", defaults={"id": None}, methods=["GET"])
 @app.route("/users/<int:id>", methods=["GET", "PUT"])
+@login_required
 def users(id=None):
     connection = get_db_connection()
     if connection is None:
@@ -410,9 +427,7 @@ if request.method == "DELETE":
 
 @app.route("/")
 def home():
-    user = session.get("user")
-    print(user)
-    return f"Hello, {user['name']}!" if user else "Hello, Guest! <a href='/login'>Login with Google</a>"
+    return f"Hello, {user['name']}! " if user else "Hello, Guest! <a href='/login'>Login with Google</a>"
 
 @app.route("/login")
 def login():
@@ -424,15 +439,18 @@ def failed_login():
 
 @app.route("/callback")
 def callback():
+        
     token = google.authorize_access_token()
-    user = google.get("userinfo").json()
-
+    # Get both tokens
+    access_token = token.get('access_token')
+    id_token = token.get('id_token')
+    
+    user = google.get("https://www.googleapis.com/oauth2/v3/userinfo").json()
     user_email = user.get("email")
     if not user_email:
         session.pop("user", None)
         return redirect(url_for("failed_login") + "?error=Email not provided by Google")
 
-    print(user_email)
     allowed_domain = "gmail.com"
     if not (user_email == "sales.club@westernusc.ca" or user_email == "westernsalesclub@gmail.com" or user_email == "justinohg121@gmail.com"):
         session.pop("user", None)
@@ -440,7 +458,9 @@ def callback():
 
     try:
         session["user"] = user
-        return redirect(url_for("home"))
+        session["tokens"] = {"access_token": access_token, "id_token": id_token}
+        # Redirect to frontend with token
+        return redirect(f"{FRONTEND_URL}/events-dashboard?token={id_token}")
     except Exception as e:
         session.pop("user", None)
         return redirect(url_for("failed_login") + "?error=Error checking user: " + str(e))
@@ -449,6 +469,43 @@ def callback():
 def logout():
     session.pop("user", None)
     return redirect(url_for("home"))
+
+@app.route("/verify", methods=["POST"])
+def verify_token():
+    try:
+        data = request.get_json()
+        token = data.get('token')
+        if not token:
+            return jsonify({"message": "No token provided"}), 400
+
+        try:
+            # Try verifying as ID token first
+            idinfo = id_token.verify_oauth2_token(
+                token, 
+                google_requests.Request(), 
+                app.config["GOOGLE_CLIENT_ID"]
+            )
+            return jsonify({
+                "valid": True,
+                "user": idinfo,
+                "type": "id_token"
+            }), 200
+        except ValueError:
+            # If ID token verification fails, check if it's a valid access token
+            response = google.get("https://www.googleapis.com/oauth2/v3/userinfo", token={"access_token": token})
+            if response.ok:
+                return jsonify({
+                    "valid": True,
+                    "user": response.json(),
+                    "type": "access_token"
+                }), 200
+            raise ValueError("Invalid token")
+
+    except Exception as e:
+        return jsonify({
+            "valid": False,
+            "message": f"Invalid token: {str(e)}"
+        }), 401
 
 def get_storage_client():
     """Returns a Google Cloud Storage client."""
