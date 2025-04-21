@@ -1,27 +1,27 @@
 # Flask and related packages
-Flask==2.3.3
-flask-cors==4.0.0
-flask-login==0.6.2
-flask-session==0.5.0
-flask-limiter==3.5.0
+Flask
+flask-cors
+flask-login
+flask-session
+flask-limiter
 
 # Authentication
-Authlib==1.2.1
-google-auth==2.23.0
+Authlib
+google-auth
 
 # Database
-mysql-connector-python==8.1.0
-PyMySQL==1.1.0
+mysql-connector-python
+PyMySQL
 
 # Google Cloud
-google-cloud-sql-connector==1.2.1
-google-cloud-storage==2.11.0
+google-cloud-sql-connector
+google-cloud-storage
 
 # Utilities
-Werkzeug==2.3.7
-uuid==1.30
-secrets==1.0.0
+Werkzeug
+uuid
+secrets
 
 # Additional dependencies
-requests==2.31.0
-python-dotenv==1.0.0
+requests
+python-dotenv
