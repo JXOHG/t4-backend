@@ -427,8 +427,7 @@ if request.method == "DELETE":
 
 @app.route("/")
 def home():
-    user = session.get("user")
-    return f"Hello, {user['name']}! " if user else "Hello, Guest! <a href='/login'>Login with Google</a>"
+    return f"Hello, {session['user']['name']}! " if 'user' in session else "Hello, Guest! <a href='/login'>Login with Google</a>"
 
 @app.route("/login")
 def login():

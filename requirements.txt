@@ -1,13 +1,27 @@
-flask
+# Flask and related packages
+Flask
 flask-cors
-google-auth
-authlib
 flask-login
 flask-session
 flask-limiter
+
+# Authentication
+Authlib
+google-auth
+
+# Database
 mysql-connector-python
-cloud-sql-python-connector
-pymysql
+PyMySQL
+
+# Google Cloud
+google-cloud-sql-connector
 google-cloud-storage
-werkzeug
-gunicorn
+
+# Utilities
+Werkzeug
+uuid
+secrets
+
+# Additional dependencies
+requests
+python-dotenv
