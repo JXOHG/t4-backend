@@ -30,7 +30,7 @@ import uuid
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=["http://localhost:5173"])
 
 limiter = Limiter(
     get_remote_address,
@@ -68,7 +68,7 @@ google = oauth.register(
     server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
     userinfo_endpoint='https://www.googleapis.com/oauth2/v3/userinfo',
     client_kwargs={"scope": "openid email profile"},
-    redirect_to=FRONTEND_URL + "/events-dashboard"
+    redirect_to=FRONTEND_URL + "/callback"
 )
 
 # Initialize the Connector object
@@ -432,6 +432,8 @@ def home():
 
 @app.route("/login")
 def login():
+    #debug
+    print("login")
     return google.authorize_redirect(url_for("callback", _external=True))
 
 @app.route("/login-failed")
