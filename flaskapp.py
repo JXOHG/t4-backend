@@ -34,7 +34,7 @@ app = Flask(__name__)
 CORS(app, 
      origins=["http://localhost:5173"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-     allow_headers=["Content-Type", "Authorization"],# Important for sessions/cookies
+     allow_headers=["Content-Type", "Authorization"],
      expose_headers=["Content-Range", "X-Content-Range"])
 
 
@@ -61,6 +61,7 @@ app.config["GOOGLE_CLIENT_ID"] = os.getenv("GOOGLE_CLIENT_ID")
 app.config["GOOGLE_CLIENT_SECRET"] = os.getenv("GOOGLE_CLIENT_SECRET")
 
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
+REDIRECT_URI = os.getenv('REDIRECT_URI', 'http://127.0.0.1:5000')
 
 oauth = OAuth(app)
 google = oauth.register(
@@ -74,7 +75,7 @@ google = oauth.register(
     server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
     userinfo_endpoint='https://www.googleapis.com/oauth2/v3/userinfo',
     client_kwargs={"scope": "openid email profile"},
-    redirect_to=FRONTEND_URL + "/callback"
+    redirect_to= REDIRECT_URI + "/callback"
 )
 
 # Initialize the Connector object
