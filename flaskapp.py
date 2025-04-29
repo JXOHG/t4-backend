@@ -30,7 +30,9 @@ import uuid
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
-CORS(app, origins=["http://localhost:5173"])
+
+CORS(app, supports_credentials=True, origins=["http://localhost:5173"])
+
 
 limiter = Limiter(
     get_remote_address,
@@ -126,12 +128,49 @@ def test_database_connection():
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if request.method in ["PUT", "POST"] and "user" not in session:
-            return jsonify({"message": "Unauthorized. Please log in."}), 401
-        return f(*args, **kwargs)
+        # First check if the user is in session (cookie-based auth)
+        if "user" in session:
+            return f(*args, **kwargs)
+            
+        # If not in session, check for token-based auth in headers
+        auth_header = request.headers.get('Authorization')
+        if auth_header and auth_header.startswith('Bearer '):
+            token = auth_header.split('Bearer ')[1]
+            try:
+                # Verify the token
+                idinfo = id_token.verify_oauth2_token(
+                    token, 
+                    google_requests.Request(), 
+                    app.config["GOOGLE_CLIENT_ID"]
+                )
+                
+                # Check if the email is authorized
+                user_email = idinfo.get("email")
+                if not user_email:
+                    return jsonify({"message": "Email not provided in token"}), 401
+                    
+                allowed_emails = ["sales.club@westernusc.ca", "westernsalesclub@gmail.com", "justinohg121@gmail.com"]
+                if user_email not in allowed_emails:
+                    return jsonify({"message": "User not authorized"}), 403
+                
+                # Store user in session for subsequent requests
+                session["user"] = {
+                    "email": user_email,
+                    "name": idinfo.get("name", "User")
+                }
+                
+                return f(*args, **kwargs)
+                
+            except Exception as e:
+                return jsonify({"message": f"Invalid or expired token: {str(e)}"}), 401
+        
+        # If neither session nor token authentication works
+        return jsonify({"message": "Unauthorized. Please log in."}), 401
+    
     return decorated_function
 
 
+# Modified /events endpoint with consistent date handling
 @app.route("/events", defaults={"event_id": None}, methods=["GET", "POST"])
 @app.route("/events/<int:event_id>", methods=["GET", "PUT", "DELETE"])
 @login_required
@@ -183,21 +222,39 @@ def events(event_id = None):
             return jsonify({"message": f"Missing data: {str(e)}"}), 400
         
         try:
-            # Example input: 'Mon, 15 Jul 2025 00:00:00 GMT'
-            parsed_event_date = datetime.strptime(eventDate, "%a, %d %b %Y %H:%M:%S GMT")
+            # More robust date parsing
+            try:
+                # Try the first format 'Mon, 15 Jul 2025 00:00:00 GMT'
+                parsed_event_date = datetime.strptime(eventDate, "%a, %d %b %Y %H:%M:%S GMT")
+            except ValueError:
+                try:
+                    # Try ISO format
+                    parsed_event_date = datetime.fromisoformat(eventDate)
+                except ValueError:
+                    # Try another common format
+                    parsed_event_date = datetime.strptime(eventDate, "%Y-%m-%dT%H:%M:%S.%fZ")
+            
             formatted_event_date = parsed_event_date.strftime("%Y-%m-%d %H:%M:%S")
+            
         except Exception as e:
             cursor.close()
             connection.close()
-            return jsonify({"message": f"Invalid date format: {str(e)}"}), 400
+            return jsonify({
+                "message": f"Invalid date format: {str(e)}",
+                "received": eventDate,
+                "expected": "Format like 'Mon, 15 Jul 2025 00:00:00 GMT'"
+            }), 400
         
         try:
+            # For debugging purposes, log the values
+            print(f"Creating event: {title}, {description}, {formatted_event_date}, {location}")
+            
             cursor.callproc("CreateEvent", (title, description, formatted_event_date, location))
             connection.commit()
             return jsonify({"message": "Created event"}), 201
         except Exception as e:
             print(f"Error: {e}")
-            return jsonify({"message": "An error occurred"}), 500
+            return jsonify({"message": f"An error occurred: {str(e)}"}), 500
         finally:
             cursor.close()
             connection.close()
@@ -220,15 +277,32 @@ def events(event_id = None):
             return jsonify({"message": f"Missing data: {str(e)}"}), 400
         
         try:
-            # Example input: 'Mon, 15 Jul 2025 00:00:00 GMT'
-            parsed_event_date = datetime.strptime(eventDate, "%a, %d %b %Y %H:%M:%S GMT")
+            # More robust date parsing
+            try:
+                # Try the first format 'Mon, 15 Jul 2025 00:00:00 GMT'
+                parsed_event_date = datetime.strptime(eventDate, "%a, %d %b %Y %H:%M:%S GMT")
+            except ValueError:
+                try:
+                    # Try ISO format
+                    parsed_event_date = datetime.fromisoformat(eventDate)
+                except ValueError:
+                    # Try another common format
+                    parsed_event_date = datetime.strptime(eventDate, "%Y-%m-%dT%H:%M:%S.%fZ")
+                    
             formatted_event_date = parsed_event_date.strftime("%Y-%m-%d %H:%M:%S")
         except Exception as e:
             cursor.close()
             connection.close()
-            return jsonify({"message": f"Invalid date format: {str(e)}"}), 400
+            return jsonify({
+                "message": f"Invalid date format: {str(e)}",
+                "received": eventDate,
+                "expected": "Format like 'Mon, 15 Jul 2025 00:00:00 GMT'"
+            }), 400
         
         try:
+            # For debugging purposes, log the values
+            print(f"Updating event: {event_id}, {title}, {description}, {formatted_event_date}, {location}")
+            
             cursor.callproc("UpdateEvent", (event_id, title, description, formatted_event_date, location))
             connection.commit()
             return jsonify({"message": "Updated event"}), 200
@@ -432,9 +506,11 @@ def home():
 
 @app.route("/login")
 def login():
-    #debug
-    print("login")
-    return google.authorize_redirect(url_for("callback", _external=True))
+
+    # Set redirect URI to the callback endpoint
+    redirect_uri = url_for("callback", _external=True)
+    return google.authorize_redirect(redirect_uri)
+
 
 @app.route("/login-failed")
 def failed_login():
@@ -442,32 +518,35 @@ def failed_login():
 
 @app.route("/callback")
 def callback():
-        
-    token = google.authorize_access_token()
-    # Get both tokens
-    access_token = token.get('access_token')
-    id_token = token.get('id_token')
-    
-    user = google.get("https://www.googleapis.com/oauth2/v3/userinfo").json()
-    user_email = user.get("email")
-    if not user_email:
-        session.pop("user", None)
-        return redirect(url_for("failed_login") + "?error=Email not provided by Google")
-
-    allowed_domain = "gmail.com"
-    if not (user_email == "sales.club@westernusc.ca" or user_email == "westernsalesclub@gmail.com" or user_email == "justinohg121@gmail.com"):
-        session.pop("user", None)
-        return redirect(url_for("failed_login") + "?error=Only users from " + allowed_domain + " are allowed to sign in")
-
     try:
+        # Get token information from Google
+        token = google.authorize_access_token()
+        # Get both tokens
+        access_token = token.get('access_token')
+        id_token = token.get('id_token')
+        
+        # Get user info
+        user = google.get("https://www.googleapis.com/oauth2/v3/userinfo").json()
+        user_email = user.get("email")
+        
+        if not user_email:
+            return redirect(f"{FRONTEND_URL}/admin-login?error=Email not provided by Google")
+
+        # Check allowed emails
+        allowed_emails = ["sales.club@westernusc.ca", "westernsalesclub@gmail.com", "justinohg121@gmail.com"]
+        if user_email not in allowed_emails:
+            return redirect(f"{FRONTEND_URL}/admin-login?error=Unauthorized email address")
+
+        # Store in session
         session["user"] = user
         session["tokens"] = {"access_token": access_token, "id_token": id_token}
+        
         # Redirect to frontend with token
-        return redirect(f"{FRONTEND_URL}/events-dashboard?token={id_token}")
+        return redirect(f"{FRONTEND_URL}/admin-login?token={id_token}")
+        
     except Exception as e:
-        session.pop("user", None)
-        return redirect(url_for("failed_login") + "?error=Error checking user: " + str(e))
-
+        print(f"Callback error: {str(e)}")
+        return redirect(f"{FRONTEND_URL}/admin-login?error=Authentication failed")
 @app.route("/logout")
 def logout():
     session.pop("user", None)
@@ -478,33 +557,40 @@ def verify_token():
     try:
         data = request.get_json()
         token = data.get('token')
+        
         if not token:
-            return jsonify({"message": "No token provided"}), 400
+            return jsonify({"valid": False, "message": "No token provided"}), 400
 
-        try:
-            # Try verifying as ID token first
-            idinfo = id_token.verify_oauth2_token(
-                token, 
-                google_requests.Request(), 
-                app.config["GOOGLE_CLIENT_ID"]
-            )
-            return jsonify({
-                "valid": True,
-                "user": idinfo,
-                "type": "id_token"
-            }), 200
-        except ValueError:
-            # If ID token verification fails, check if it's a valid access token
-            response = google.get("https://www.googleapis.com/oauth2/v3/userinfo", token={"access_token": token})
-            if response.ok:
-                return jsonify({
-                    "valid": True,
-                    "user": response.json(),
-                    "type": "access_token"
-                }), 200
-            raise ValueError("Invalid token")
-
+        # Verify the token
+        idinfo = id_token.verify_oauth2_token(
+            token, 
+            google_requests.Request(), 
+            app.config["GOOGLE_CLIENT_ID"]
+        )
+        
+        # Check if token is expired
+        exp = idinfo.get('exp')
+        current_time = datetime.now().timestamp()
+        if exp and current_time > exp:
+            return jsonify({"valid": False, "message": "Token expired"}), 401
+            
+        # Check allowed emails
+        user_email = idinfo.get("email")
+        allowed_emails = ["sales.club@westernusc.ca", "westernsalesclub@gmail.com", "justinohg121@gmail.com"]
+        
+        if not user_email or user_email not in allowed_emails:
+            return jsonify({"valid": False, "message": "Unauthorized email address"}), 403
+            
+        # Valid token
+        return jsonify({
+            "valid": True,
+            "user": {
+                "email": user_email,
+                "name": idinfo.get("name", "User")
+            }
+        }), 200
     except Exception as e:
+        print(f"Token verification error: {str(e)}")
         return jsonify({
             "valid": False,
             "message": f"Invalid token: {str(e)}"
