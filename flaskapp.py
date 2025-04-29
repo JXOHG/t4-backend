@@ -68,6 +68,7 @@ google = oauth.register(
     server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
     userinfo_endpoint='https://www.googleapis.com/oauth2/v3/userinfo',
     client_kwargs={"scope": "openid email profile"},
+    redirect_to=FRONTEND_URL + "/events-dashboard"
 )
 
 # Initialize the Connector object
