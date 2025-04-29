@@ -75,7 +75,6 @@ google = oauth.register(
     server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
     userinfo_endpoint='https://www.googleapis.com/oauth2/v3/userinfo',
     client_kwargs={"scope": "openid email profile"},
-    redirect_to= REDIRECT_URI + "/callback"
 )
 
 # Initialize the Connector object
@@ -511,7 +510,6 @@ def home():
 
 @app.route("/login")
 def login():
-
     # Set redirect URI to the callback endpoint
     redirect_uri = url_for("callback", _external=True)
     return google.authorize_redirect(redirect_uri)
@@ -523,7 +521,10 @@ def failed_login():
 
 @app.route("/callback")
 def callback():
+    print("Callback route hit") 
     try:
+        print("Starting token exchange")  
+        token = google.authorize_access_token()
         # Get token information from Google
         token = google.authorize_access_token()
         # Get both tokens
