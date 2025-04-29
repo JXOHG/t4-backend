@@ -29,8 +29,56 @@ from google.cloud import storage
 import uuid
 from werkzeug.utils import secure_filename
 
+from flask import Flask, request, jsonify, send_file, session, url_for, redirect
+from flask_cors import CORS
+from io import StringIO
+from functools import wraps
+import os
+import json
+import jwt
+from threading import Timer
+import mysql.connector
+from mysql.connector import Error
+from datetime import datetime, timedelta
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
+
 app = Flask(__name__)
-CORS(app)
+CORS(app, supports_credentials=True, resources={
+    r"/*": {
+        "origins": ["http://localhost:5173", "http://127.0.0.1:5173"],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    }
+})
+# Get JWT Secret key from environment variables
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET:
+    print("WARNING: JWT_SECRET not set in environment variables, using default value")
+    JWT_SECRET = "default-insecure-jwt-secret" # Fallback value, insecure for production
+    
+JWT_EXPIRATION = 24 * 60 * 60  # 24 hours in seconds
+
+# Create JWT token
+def create_jwt_token(user_info):
+    expiration = datetime.utcnow() + timedelta(seconds=JWT_EXPIRATION)
+    payload = {
+        "sub": user_info.get("email", ""),
+        "name": user_info.get("name", ""),
+        "exp": expiration
+    }
+    token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+    return token
+
+# Verify JWT token
+def verify_jwt_token(token):
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+        return payload
+    except jwt.ExpiredSignatureError:
+        return None
+    except jwt.InvalidTokenError:
+        return None
 
 limiter = Limiter(
     get_remote_address,
@@ -173,22 +221,34 @@ def events(event_id = None):
             return jsonify({"message": "Invalid JSON or missing Content-Type"}), 400
         try:
             title = data["title"]
-            description = data["description"]
+            description = data.get("description", "")  # Make description optional
             eventDate = data["eventDate"]
-            location = data["location"]
-        except Exception as e:
+            location = data.get("location", "")  # Make location optional
+        except KeyError as e:
             cursor.close()
             connection.close()
-            return jsonify({"message": f"Missing data: {str(e)}"}), 400
+            return jsonify({"message": f"Missing required field: {str(e)}"}), 400
         
         try:
-            # Example input: 'Mon, 15 Jul 2025 00:00:00 GMT'
-            parsed_event_date = datetime.strptime(eventDate, "%a, %d %b %Y %H:%M:%S GMT")
+            # Try multiple date formats
+            try:
+                # First format: 'Mon, 15 Jul 2025 00:00:00 GMT'
+                parsed_event_date = datetime.strptime(eventDate, "%a, %d %b %Y %H:%M:%S GMT")
+            except ValueError:
+                try:
+                    # Alternative format
+                    parsed_event_date = datetime.strptime(eventDate, "%Y-%m-%dT%H:%M:%S.%fZ")
+                except ValueError:
+                    # Last attempt with flexible parser
+                    from dateutil import parser as date_parser
+                    parsed_event_date = date_parser.parse(eventDate)
+                    
             formatted_event_date = parsed_event_date.strftime("%Y-%m-%d %H:%M:%S")
+            print(f"Parsed date: {formatted_event_date} from input {eventDate}")
         except Exception as e:
             cursor.close()
             connection.close()
-            return jsonify({"message": f"Invalid date format: {str(e)}"}), 400
+            return jsonify({"message": f"Invalid date format: {str(e)}. Please use format 'Mon, 15 Jul 2025 00:00:00 GMT'"}), 400
         
         try:
             cursor.callproc("CreateEvent", (title, description, formatted_event_date, location))
@@ -196,7 +256,7 @@ def events(event_id = None):
             return jsonify({"message": "Created event"}), 201
         except Exception as e:
             print(f"Error: {e}")
-            return jsonify({"message": "An error occurred"}), 500
+            return jsonify({"message": f"An error occurred while creating event: {str(e)}"}), 500
         finally:
             cursor.close()
             connection.close()
@@ -210,29 +270,41 @@ def events(event_id = None):
         
         try:
             title = data["title"]
-            description = data["description"]
+            description = data.get("description", "")  # Make description optional
             eventDate = data["eventDate"]
-            location = data["location"]
-        except Exception as e:
+            location = data.get("location", "")  # Make location optional
+        except KeyError as e:
             cursor.close()
             connection.close()
-            return jsonify({"message": f"Missing data: {str(e)}"}), 400
+            return jsonify({"message": f"Missing required field: {str(e)}"}), 400
         
         try:
-            # Example input: 'Mon, 15 Jul 2025 00:00:00 GMT'
-            parsed_event_date = datetime.strptime(eventDate, "%a, %d %b %Y %H:%M:%S GMT")
+            # Try multiple date formats
+            try:
+                # First format: 'Mon, 15 Jul 2025 00:00:00 GMT'
+                parsed_event_date = datetime.strptime(eventDate, "%a, %d %b %Y %H:%M:%S GMT")
+            except ValueError:
+                try:
+                    # Alternative format
+                    parsed_event_date = datetime.strptime(eventDate, "%Y-%m-%dT%H:%M:%S.%fZ")
+                except ValueError:
+                    # Last attempt with flexible parser
+                    from dateutil import parser as date_parser
+                    parsed_event_date = date_parser.parse(eventDate)
+                    
             formatted_event_date = parsed_event_date.strftime("%Y-%m-%d %H:%M:%S")
+            print(f"Parsed date: {formatted_event_date} from input {eventDate}")
         except Exception as e:
             cursor.close()
             connection.close()
-            return jsonify({"message": f"Invalid date format: {str(e)}"}), 400
+            return jsonify({"message": f"Invalid date format: {str(e)}. Please use format 'Mon, 15 Jul 2025 00:00:00 GMT'"}), 400
         
         try:
             cursor.callproc("UpdateEvent", (event_id, title, description, formatted_event_date, location))
             connection.commit()
             return jsonify({"message": "Updated event"}), 200
         except Exception as e:
-            return jsonify({"message": f"error updating event: {str(e)}"}), 401 
+            return jsonify({"message": f"Error updating event: {str(e)}"}), 500
         finally:
             cursor.close()
             connection.close()
@@ -243,7 +315,7 @@ def events(event_id = None):
             connection.commit()      
             return jsonify({"message": f"deleted event {event_id}"}), 200
         except Exception as e:
-            return jsonify({"message": f"event cannot be deleted, Error: {e}"}), 401
+            return jsonify({"message": f"event cannot be deleted, Error: {e}"}), 500
         finally:
             cursor.close()
             connection.close()
@@ -439,32 +511,35 @@ def failed_login():
 
 @app.route("/callback")
 def callback():
-        
-    token = google.authorize_access_token()
-    # Get both tokens
-    access_token = token.get('access_token')
-    id_token = token.get('id_token')
-    
-    user = google.get("https://www.googleapis.com/oauth2/v3/userinfo").json()
-    user_email = user.get("email")
-    if not user_email:
-        session.pop("user", None)
-        return redirect(url_for("failed_login") + "?error=Email not provided by Google")
-
-    allowed_domain = "gmail.com"
-    if not (user_email == "sales.club@westernusc.ca" or user_email == "westernsalesclub@gmail.com" or user_email == "justinohg121@gmail.com"):
-        session.pop("user", None)
-        return redirect(url_for("failed_login") + "?error=Only users from " + allowed_domain + " are allowed to sign in")
-
     try:
+        token = google.authorize_access_token()
+        # Get both tokens
+        access_token = token.get('access_token')
+        id_token_value = token.get('id_token')
+        
+        user = google.get("https://www.googleapis.com/oauth2/v3/userinfo").json()
+        user_email = user.get("email")
+        if not user_email:
+            session.pop("user", None)
+            return redirect(url_for("failed_login") + "?error=Email not provided by Google")
+
+        allowed_domain = "gmail.com"
+        if not (user_email == "sales.club@westernusc.ca" or user_email == "westernsalesclub@gmail.com" or user_email == "justinohg121@gmail.com"):
+            session.pop("user", None)
+            return redirect(url_for("failed_login") + "?error=Only users from " + allowed_domain + " are allowed to sign in")
+
+        # Store in session for browser-based flows
         session["user"] = user
-        session["tokens"] = {"access_token": access_token, "id_token": id_token}
+        session["tokens"] = {"access_token": access_token, "id_token": id_token_value}
+        
+        # Create JWT token for API authentication
+        jwt_token = create_jwt_token(user)
+        
         # Redirect to frontend with token
-        return redirect(f"{FRONTEND_URL}/events-dashboard?token={id_token}")
+        return redirect(f"{FRONTEND_URL}/events-dashboard?token={jwt_token}")
     except Exception as e:
         session.pop("user", None)
         return redirect(url_for("failed_login") + "?error=Error checking user: " + str(e))
-
 @app.route("/logout")
 def logout():
     session.pop("user", None)
@@ -478,25 +553,54 @@ def verify_token():
         if not token:
             return jsonify({"message": "No token provided"}), 400
 
+        # First try as JWT token
+        jwt_payload = verify_jwt_token(token)
+        if jwt_payload:
+            # Set session data if using cookies
+            if not request.headers.get('Authorization'):
+                session["user"] = {
+                    "email": jwt_payload.get("sub"),
+                    "name": jwt_payload.get("name")
+                }
+            return jsonify({
+                "valid": True,
+                "user": jwt_payload,
+                "type": "jwt_token"
+            }), 200
+            
+        # If JWT verification fails, try Google token verification
         try:
-            # Try verifying as ID token first
             idinfo = id_token.verify_oauth2_token(
                 token, 
                 google_requests.Request(), 
                 app.config["GOOGLE_CLIENT_ID"]
             )
+            # Set session for web flows
+            if not request.headers.get('Authorization'):
+                session["user"] = {
+                    "email": idinfo.get("email"),
+                    "name": idinfo.get("name")
+                }
             return jsonify({
                 "valid": True,
                 "user": idinfo,
                 "type": "id_token"
             }), 200
         except ValueError:
-            # If ID token verification fails, check if it's a valid access token
-            response = google.get("https://www.googleapis.com/oauth2/v3/userinfo", token={"access_token": token})
+            # Finally try as access token
+            response = google.get("https://www.googleapis.com/oauth2/v3/userinfo", 
+                                 token={"access_token": token})
             if response.ok:
+                user_info = response.json()
+                # Set session for web flows
+                if not request.headers.get('Authorization'):
+                    session["user"] = {
+                        "email": user_info.get("email"),
+                        "name": user_info.get("name")
+                    }
                 return jsonify({
                     "valid": True,
-                    "user": response.json(),
+                    "user": user_info,
                     "type": "access_token"
                 }), 200
             raise ValueError("Invalid token")
