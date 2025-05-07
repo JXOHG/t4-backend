@@ -55,3 +55,6 @@ dist/
 # Sensitive configuration files
 config.ini
 *.cfg
+
+#flask sessions
+flask_session/
