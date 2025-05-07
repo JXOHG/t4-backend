@@ -31,7 +31,7 @@ from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 
-CORS(app, 
+CORS(app, supports_credentials=True,
      origins=["http://localhost:5173"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
      allow_headers=["Content-Type", "Authorization"],
@@ -510,9 +510,11 @@ def home():
 
 @app.route("/login")
 def login():
-    # Set redirect URI to the callback endpoint
+    # Generate and store a state parameter for CSRF protection
+    session["oauth_state"] = secrets.token_hex(16)
+    # Set redirect URI to the callback endpoint with state parameter
     redirect_uri = url_for("callback", _external=True)
-    return google.authorize_redirect(redirect_uri)
+    return google.authorize_redirect(redirect_uri, state=session["oauth_state"])
 
 
 @app.route("/login-failed")
@@ -523,9 +525,12 @@ def failed_login():
 def callback():
     print("Callback route hit") 
     try:
+        # Verify state parameter to prevent CSRF
+        if request.args.get('state') != session.get('oauth_state'):
+            print("State mismatch error")
+            return redirect(f"{FRONTEND_URL}/admin-login?error=CSRF+validation+failed")
+        
         print("Starting token exchange")  
-        token = google.authorize_access_token()
-        # Get token information from Google
         token = google.authorize_access_token()
         # Get both tokens
         access_token = token.get('access_token')
@@ -536,23 +541,26 @@ def callback():
         user_email = user.get("email")
         
         if not user_email:
-            return redirect(f"{FRONTEND_URL}/admin-login?error=Email not provided by Google")
+            return redirect(f"{FRONTEND_URL}/admin-login?error=Email+not+provided+by+Google")
 
         # Check allowed emails
         allowed_emails = ["sales.club@westernusc.ca", "westernsalesclub@gmail.com", "justinohg121@gmail.com"]
         if user_email not in allowed_emails:
-            return redirect(f"{FRONTEND_URL}/admin-login?error=Unauthorized email address")
+            return redirect(f"{FRONTEND_URL}/admin-login?error=Unauthorized+email+address")
 
         # Store in session
         session["user"] = user
         session["tokens"] = {"access_token": access_token, "id_token": id_token}
+        
+        # Clean up the state parameter
+        session.pop('oauth_state', None)
         
         # Redirect to frontend with token
         return redirect(f"{FRONTEND_URL}/admin-login?token={id_token}")
         
     except Exception as e:
         print(f"Callback error: {str(e)}")
-        return redirect(f"{FRONTEND_URL}/admin-login?error=Authentication failed")
+        return redirect(f"{FRONTEND_URL}/admin-login?error=Authentication+failed")
 @app.route("/logout")
 def logout():
     session.pop("user", None)
