@@ -12,16 +12,18 @@ google-auth
 # Database
 mysql-connector-python
 PyMySQL
+cloud-sql-python-connector[pymysql]
 
 # Google Cloud
-google-cloud-sql-connector
 google-cloud-storage
 
 # Utilities
 Werkzeug
-uuid
-secrets
+pyOpenSSL  # Added OpenSSL bindings
 
 # Additional dependencies
 requests
 python-dotenv
+
+#gunicorn
+gunicorn

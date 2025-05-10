@@ -31,12 +31,12 @@ from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 
-CORS(app, supports_credentials=True,
-     origins=["http://localhost:5173", "https://jxohg.github.io/t4-frontend"],
+CORS(app,
+     supports_credentials=True,
+     resources={r"/*": {"origins": ["http://localhost:5173", "https://jxohg.github.io/t4-frontend", "https://t4-backend.web.app"]}},
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
      allow_headers=["Content-Type", "Authorization"],
      expose_headers=["Content-Range", "X-Content-Range"])
-
 
 limiter = Limiter(
     get_remote_address,
@@ -60,8 +60,8 @@ Session(app)
 app.config["GOOGLE_CLIENT_ID"] = os.getenv("GOOGLE_CLIENT_ID")
 app.config["GOOGLE_CLIENT_SECRET"] = os.getenv("GOOGLE_CLIENT_SECRET")
 
-FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
-REDIRECT_URI = os.getenv('REDIRECT_URI', 'http://127.0.0.1:5000')
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://t4-backend.web.app')
+REDIRECT_URI = os.getenv('REDIRECT_URI', 'https://flask-app-250624862173.us-central1.run.app')
 
 oauth = OAuth(app)
 google = oauth.register(
