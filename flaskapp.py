@@ -174,18 +174,21 @@ def login_required(f):
     return decorated_function
 
 
-# Modified /events endpoint with consistent date handling
 @app.route("/events", defaults={"event_id": None}, methods=["GET", "POST"])
 @app.route("/events/<int:event_id>", methods=["GET", "PUT", "DELETE"])
-@login_required
 def events(event_id = None):
+    """
+    Events endpoint for handling event operations.
+    GET: Publicly accessible to retrieve event information
+    POST/PUT/DELETE: Requires authentication
+    """
     connection = get_db_connection() 
     if connection is None:
         return jsonify({"message": "Database connection failed"}), 500
     cursor = connection.cursor(pymysql.cursors.DictCursor)
         
     if request.method == 'GET':
-        # Return upcoming events
+        # Return upcoming events - publicly accessible
         if event_id is None:
             try:
                 cursor.callproc("GetUpcomingEvents")
@@ -197,7 +200,7 @@ def events(event_id = None):
                 cursor.close()
                 connection.close()
                 
-        # Return event with given event id
+        # Return event with given event id - publicly accessible
         try:
             cursor.callproc("GetEventDetails", (event_id,))
             row = cursor.fetchall()
@@ -208,6 +211,11 @@ def events(event_id = None):
             cursor.close()
             connection.close()
 
+    # For non-GET methods, require authentication
+    if not _is_authenticated():
+        return jsonify({"message": "Unauthorized. Please log in."}), 401
+
+    # POST, PUT, DELETE methods below this point require authentication
     elif request.method == 'POST':
         # Create a new event
         data = request.get_json()
@@ -326,6 +334,51 @@ def events(event_id = None):
         finally:
             cursor.close()
             connection.close()
+
+def _is_authenticated():
+    """
+    Helper function to check if the user is authenticated.
+    Used by the events endpoint for non-GET methods.
+    """
+    # First check if the user is in session (cookie-based auth)
+    if "user" in session:
+        return True
+        
+    # If not in session, check for token-based auth in headers
+    auth_header = request.headers.get('Authorization')
+    if auth_header and auth_header.startswith('Bearer '):
+        token = auth_header.split('Bearer ')[1]
+        try:
+            # Verify the token
+            idinfo = id_token.verify_oauth2_token(
+                token, 
+                google_requests.Request(), 
+                app.config["GOOGLE_CLIENT_ID"]
+            )
+            
+            # Check if the email is authorized
+            user_email = idinfo.get("email")
+            if not user_email:
+                return False
+                
+            allowed_emails = ["sales.club@westernusc.ca", "westernsalesclub@gmail.com", "justinohg121@gmail.com"]
+            if user_email not in allowed_emails:
+                return False
+            
+            # Store user in session for subsequent requests
+            session["user"] = {
+                "email": user_email,
+                "name": idinfo.get("name", "User")
+            }
+            
+            return True
+            
+        except Exception as e:
+            print(f"Authentication error: {str(e)}")
+            return False
+    
+    # If neither session nor token authentication works
+    return False
 
 """
 @app.route("/events/<int:event_id>/register", methods=["POST"])
