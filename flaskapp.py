@@ -32,7 +32,7 @@ from werkzeug.utils import secure_filename
 app = Flask(__name__)
 
 CORS(app, supports_credentials=True,
-     origins=["http://localhost:5173"],
+     origins=["http://localhost:5173", "https://https://jxohg.github.io/t4-frontend"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
      allow_headers=["Content-Type", "Authorization"],
      expose_headers=["Content-Range", "X-Content-Range"])
