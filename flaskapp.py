@@ -153,7 +153,7 @@ def login_required(f):
                 if not user_email:
                     return jsonify({"message": "Email not provided in token"}), 401
                     
-                allowed_emails = ["sales.club@westernusc.ca", "westernsalesclub@gmail.com", "justinohg121@gmail.com"]
+                allowed_emails = ["sales.club@westernusc.ca", "westernsalesclub@gmail.com", "justinohg121@gmail.com", "thomasllamzon@gmail.com"]
                 if user_email not in allowed_emails:
                     return jsonify({"message": "User not authorized"}), 403
                 
@@ -361,7 +361,7 @@ def _is_authenticated():
             if not user_email:
                 return False
                 
-            allowed_emails = ["sales.club@westernusc.ca", "westernsalesclub@gmail.com", "justinohg121@gmail.com"]
+            allowed_emails = ["sales.club@westernusc.ca", "westernsalesclub@gmail.com", "justinohg121@gmail.com", "thomasllamzon@gmail.com"]
             if user_email not in allowed_emails:
                 return False
             
@@ -597,7 +597,7 @@ def callback():
             return redirect(f"{FRONTEND_URL}/admin-login?error=Email+not+provided+by+Google")
 
         # Check allowed emails
-        allowed_emails = ["sales.club@westernusc.ca", "westernsalesclub@gmail.com", "justinohg121@gmail.com"]
+        allowed_emails = ["sales.club@westernusc.ca", "westernsalesclub@gmail.com", "justinohg121@gmail.com", "thomasllamzon@gmail.com"]
         if user_email not in allowed_emails:
             return redirect(f"{FRONTEND_URL}/admin-login?error=Unauthorized+email+address")
 
@@ -643,7 +643,7 @@ def verify_token():
             
         # Check allowed emails
         user_email = idinfo.get("email")
-        allowed_emails = ["sales.club@westernusc.ca", "westernsalesclub@gmail.com", "justinohg121@gmail.com"]
+        allowed_emails = ["sales.club@westernusc.ca", "westernsalesclub@gmail.com", "justinohg121@gmail.com", "thomasllamzon@gmail.com"]
         
         if not user_email or user_email not in allowed_emails:
             return jsonify({"valid": False, "message": "Unauthorized email address"}), 403
