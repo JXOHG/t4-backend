@@ -33,7 +33,7 @@ app = Flask(__name__)
 
 CORS(app,
      supports_credentials=True,
-     resources={r"/*": {"origins": ["http://localhost:5173", "https://jxohg.github.io/t4-frontend", "https://t4-backend.web.app"]}},
+     resources={r"/*": {"origins": ["http://localhost:5173", "https://jxohg.github.io/t4-frontend", "https://t4-backend.web.app","https://westernsalesclub.ca"]}},
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
      allow_headers=["Content-Type", "Authorization"],
      expose_headers=["Content-Range", "X-Content-Range"])
