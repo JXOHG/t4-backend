@@ -60,7 +60,7 @@ Session(app)
 app.config["GOOGLE_CLIENT_ID"] = os.getenv("GOOGLE_CLIENT_ID")
 app.config["GOOGLE_CLIENT_SECRET"] = os.getenv("GOOGLE_CLIENT_SECRET")
 
-FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://t4-backend.web.app')
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://westernsalesclub.ca')
 REDIRECT_URI = os.getenv('REDIRECT_URI', 'https://flask-app-250624862173.us-central1.run.app')
 
 oauth = OAuth(app)
